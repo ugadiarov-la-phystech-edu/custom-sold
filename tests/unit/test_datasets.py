@@ -1,0 +1,245 @@
+"""datasets: field descriptions, the replay ring buffer, NumUpdatesWrapper and SAVi image datasets."""
+
+from collections import deque
+import copy
+
+import numpy as np
+import pytest
+import torch
+
+from datasets.image import ImageDataset, NPZDataset, PNGDataset, load_image_dataset
+from datasets.info import ColorImage, EpisodeDatasetInfo, Fields, FieldType, Scalar, TensorType, Vector
+from datasets.ring_buffer import EpisodeDataset, RingBufferDataset
+from datasets.utils import NumUpdatesWrapper
+from tests.conftest import write_image_dataset
+
+
+# ------------------------------------------------------------------------------------- info
+def test_tensor_type_converts_strings():
+    field = TensorType(device="cpu", dtype="float16", shape=[2, 3])
+    assert field.device == torch.device("cpu") and field.dtype == torch.float16 and field.shape == torch.Size([2, 3])
+    assert field.element_size() == 2 and field.step_size() == 12
+    assert TensorType.is_compatible(torch.zeros(1)) and not TensorType.is_compatible(np.zeros(1))
+    assert FieldType.is_compatible(None) is None  # Abstract body.
+
+
+def test_scalar_and_vector_validation():
+    assert Scalar(device="cpu", dtype=torch.float32, shape=()).step_size() == 4
+    with pytest.raises(ValueError, match="zero-dimensional"):
+        Scalar(device="cpu", dtype=torch.float32, shape=(1,))
+    assert Vector(device="cpu", dtype=torch.float32, shape=(3,)).step_size() == 12
+    with pytest.raises(ValueError, match="one-dimensional"):
+        Vector(device="cpu", dtype=torch.float32, shape=(1, 2))
+
+
+def test_color_image_is_height_width_channels_uint8():
+    image = ColorImage(device="cpu", height=4, width=5)
+    assert image.dtype == torch.uint8 and image.shape == (4, 5, 3) and image.step_size() == 60
+    assert ColorImage.is_compatible(torch.zeros(4, 5, 3, dtype=torch.uint8))
+    # Channel-first frames, as stored by SOLD, are not ColorImages.
+    assert not ColorImage.is_compatible(torch.zeros(3, 4, 5, dtype=torch.uint8))
+
+
+def test_fields_from_episode_infers_types():
+    episode = {"reward": [torch.tensor(1.0)], "action": [torch.zeros(2)],
+               "hwc": [torch.zeros(4, 5, 3, dtype=torch.uint8)], "obs": [torch.zeros(3, 4, 5, dtype=torch.uint8)]}
+    fields = Fields.from_episode(episode)
+    assert type(fields["reward"]) is Scalar and type(fields["action"]) is Vector
+    assert type(fields["hwc"]) is ColorImage and type(fields["obs"]) is TensorType
+    assert fields["obs"].shape == (3, 4, 5)
+
+
+@pytest.mark.parametrize("episode, match", [({"x": []}, "to be a list"), ({"x": (torch.zeros(1),)}, "to be a list"),
+                                            ({"x": [np.zeros(1)]}, "Unsupported type")])
+def test_fields_from_episode_errors(episode, match):
+    with pytest.raises(ValueError, match=match):
+        Fields.from_episode(episode)
+
+
+def test_episode_dataset_info_defaults():
+    info = EpisodeDatasetInfo()
+    assert info.is_empty and info.episode_lengths == [] and not info.is_full
+    assert EpisodeDatasetInfo(num_episodes=1).is_empty is False
+
+
+# ------------------------------------------------------------------------------ ring buffer
+def _episode(length, start=0, action_dim=2):
+    """Episode in SOLD's format: obs[t], action[t] that led to obs[t] (NaN at t=0), reward[t] (NaN at t=0)."""
+    obs = [torch.full((3, 2, 2), start + t, dtype=torch.uint8) for t in range(length)]
+    action = [torch.full((action_dim,), float("nan"))] + [torch.full((action_dim,), float(start + t))
+                                                           for t in range(1, length)]
+    reward = [torch.tensor(float("nan"))] + [torch.tensor(float(start + t)) for t in range(1, length)]
+    return {"obs": obs, "action": action, "reward": reward}
+
+
+def _add(buffer, episode):
+    length = len(episode["obs"])
+    for t in range(length):
+        buffer.add_step({key: values[t] for key, values in episode.items()}, done=t == length - 1)
+
+
+@pytest.fixture
+def buffer(tmp_path):
+    return RingBufferDataset(capacity=10, batch_size=4, sequence_length=3, save_path=str(tmp_path / "rb"))
+
+
+def test_ring_buffer_starts_empty(buffer, recwarn):
+    from datasets.info import EpisodeDatasetInfoMixin
+    assert buffer.is_empty and len(buffer) == 0 and buffer.fields is None
+    assert EpisodeDatasetInfoMixin.is_empty.fget(buffer)  # Overridden by RingBufferDataset.
+    assert buffer.average_episode_length == 0 and buffer.last_episode_return is None
+    assert "fields: None" in repr(buffer)
+
+
+def test_ring_buffer_add_step_converts_non_tensors(buffer):
+    buffer.add_step({"obs": np.zeros((3, 2, 2), np.uint8), "reward": 1.5})
+    assert isinstance(buffer.current_episode["obs"][0], torch.Tensor)
+    assert buffer.current_episode["reward"][0].item() == 1.5
+    assert buffer.num_episodes == 0
+
+
+def test_ring_buffer_stores_episode_and_statistics(buffer):
+    _add(buffer, _episode(4))
+    assert (buffer.num_episodes, buffer.num_timesteps, buffer.episode_lengths) == (1, 4, [4])
+    assert buffer.last_episode_return.item() == pytest.approx(1 + 2 + 3)
+    assert buffer.ring_buffer["obs"][:4, 0, 0, 0].tolist() == [0, 1, 2, 3]
+    assert (buffer.head, buffer.tail, list(buffer.episode_boundaries)) == (0, 4, [(0, 4)])
+    assert "num_episodes: 1" in repr(buffer) and "['obs', 'action', 'reward']" in repr(buffer)
+    assert buffer.average_episode_length == 4 and not buffer.is_empty and not buffer.is_full
+
+
+def test_ring_buffer_wraps_and_evicts_oldest(buffer):
+    _add(buffer, _episode(4, start=0))
+    _add(buffer, _episode(4, start=10))
+    _add(buffer, _episode(4, start=20))  # Needs eviction of the first episode and wraps around.
+    assert buffer.num_episodes == 2 and buffer.num_timesteps == 8 and buffer.is_full
+    assert list(buffer.episode_boundaries) == [(4, 8), (8, 12)]  # Boundaries are stored unwrapped.
+    assert buffer.head == 4 and buffer.tail == 2
+    assert buffer.ring_buffer["obs"][[8, 9, 0, 1], 0, 0, 0].tolist() == [20, 21, 22, 23]
+
+
+def test_ring_buffer_remove_last_episode_sets_head_to_tail(buffer):
+    _add(buffer, _episode(4))
+    buffer.remove_episode()
+    assert buffer.head == buffer.tail == 4 and len(buffer.episode_boundaries) == 0
+
+
+def test_ring_buffer_sample_returns_contiguous_sequences(buffer):
+    _add(buffer, _episode(4, start=0))
+    _add(buffer, _episode(4, start=10))
+    _add(buffer, _episode(4, start=20))
+    for _ in range(20):
+        batch = buffer.sample()
+        assert batch["obs"].shape == (4, 3, 3, 2, 2) and batch["action"].shape == (4, 3, 2)
+        assert batch["obs"].dtype == torch.uint8
+        first = batch["obs"][:, :, 0, 0, 0].long()
+        assert torch.all(first[:, 1:] - first[:, :-1] == 1)
+        assert set(first[:, 0].tolist()) <= {10, 20}  # The last window (start 11 / 21) is never sampled (#19).
+
+
+def test_ring_buffer_sequence_length_none_samples_all_episodes(tmp_path):
+    buffer = RingBufferDataset(capacity=10, batch_size=2, sequence_length=2, save_path=str(tmp_path))
+    _add(buffer, _episode(3))
+    buffer.sequence_length = None
+    with pytest.raises(TypeError):  # sequence_length=None is half-supported: sampling cannot build windows.
+        buffer.sample()
+
+
+def test_ring_buffer_is_empty_warns_when_episodes_are_too_short(buffer):
+    _add(buffer, _episode(2))
+    with pytest.warns(UserWarning, match="none are of sufficient length"):
+        assert buffer.is_empty
+
+
+def test_ring_buffer_files_and_load_from_disk_storage(buffer, tmp_path, capsys):
+    _add(buffer, _episode(4))
+    assert "Total estimated replay buffer size (GB)" in capsys.readouterr().out
+    buffer.ring_buffer["obs"].flush()
+    assert sorted(p.name for p in (tmp_path / "rb").iterdir()) == ["action.dat", "obs.dat", "reward.dat"]
+
+    restored = RingBufferDataset(capacity=1, batch_size=4, sequence_length=3, save_path=str(tmp_path / "copy"))
+    restored.load_from_disk_storage(str(tmp_path / "rb"), buffer.capacity, copy.deepcopy(buffer.info), buffer.head,
+                                    buffer.tail, deque(buffer.episode_boundaries))
+    assert restored.capacity == 10 and restored.num_episodes == 1 and restored.tail == 4
+    assert np.array_equal(restored.ring_buffer["obs"], buffer.ring_buffer["obs"])
+    assert restored.sample()["obs"].shape == (4, 3, 3, 2, 2)
+
+
+def test_episode_dataset_initializes_storage_from_given_fields():
+    initialized = []
+
+    class Recording(EpisodeDataset):
+        store_episode = remove_episode = sample = lambda self, *args: None
+
+        def _initialize_from_fields(self, fields):
+            initialized.append(fields)
+
+    fields = Fields(obs=TensorType(device="cpu", dtype=torch.uint8, shape=(3, 2, 2)))
+    Recording(5, 1, 1, info=EpisodeDatasetInfo(fields=fields))
+    assert initialized == [fields]
+
+
+def test_episode_dataset_is_abstract(tmp_path):
+    with pytest.raises(TypeError):
+        EpisodeDataset(5, 1)
+
+    class Minimal(EpisodeDataset):
+        store_episode = remove_episode = sample = lambda self, *args: None
+
+    dataset = Minimal(5, 1)
+    dataset._initialize_from_fields(None)
+    for method in (EpisodeDataset.store_episode, EpisodeDataset.remove_episode):
+        with pytest.raises(NotImplementedError):
+            method(dataset, *([{}] if method is EpisodeDataset.store_episode else []))
+    with pytest.raises(NotImplementedError):
+        EpisodeDataset.sample(dataset)
+
+
+def test_num_updates_wrapper(buffer):
+    assert list(NumUpdatesWrapper(buffer, 3)) == []
+    _add(buffer, _episode(4))
+    batches = list(NumUpdatesWrapper(buffer, 3))
+    assert len(batches) == 3 and batches[0]["obs"].shape == (4, 3, 3, 2, 2)
+
+
+# ---------------------------------------------------------------------------- image datasets
+@pytest.mark.parametrize("save_format, expected_class", [("png", PNGDataset), ("npz", NPZDataset)])
+def test_load_image_dataset_detects_format(tmp_path, save_format, expected_class):
+    write_image_dataset(tmp_path / "data" / "run", save_format)
+    (tmp_path / "data" / "run" / "train" / "not_an_episode").mkdir()
+    dataset = load_image_dataset(str(tmp_path / "data"), "run", "train", sequence_length=4, batch_size=2)
+    assert type(dataset) is expected_class
+    assert len(dataset) == 3 and dataset.episode_dir_names == [0, 1, 2]
+    assert dataset.dataset_infos == {"image_size": [16, 16], "action_dim": 2}
+    assert dataset.dataset_infos["action_dim"] == 2  # Cached.
+
+
+@pytest.mark.parametrize("save_format", ["png", "npz"])
+def test_image_dataset_items(tmp_path, save_format):
+    root = write_image_dataset(tmp_path / "run", save_format, episode_length=7)
+    expected = np.load(root / "val" / "1" / "episode.npz")
+    val = load_image_dataset(str(tmp_path), "run", "val", sequence_length=4)
+    images, actions = val[1]
+    assert images.shape == (4, 3, 16, 16) and images.dtype == torch.float32
+    assert 0.0 <= images.min() and images.max() <= 1.0
+    assert torch.allclose(actions, torch.from_numpy(expected["actions"][:4]))
+    if save_format == "npz":
+        assert torch.allclose(images, torch.from_numpy(expected["images"][:4]).permute(0, 3, 1, 2) / 255.)
+
+    train = load_image_dataset(str(tmp_path), "run", "train", sequence_length=4)
+    starts = set()
+    train_actions = np.load(root / "train" / "0" / "episode.npz")["actions"]
+    for seed in range(40):
+        np.random.seed(seed)
+        _, actions = train[0]
+        matches = [s for s in range(7) if len(train_actions[s:s + 4]) == len(actions)
+                   and np.allclose(train_actions[s:s + 4], actions.numpy())]
+        starts.add(matches[0])
+    assert starts == {0, 1, 2}  # Start 3 (the last window) is never used (#14).
+
+
+def test_image_dataset_base_class(tmp_path):
+    write_image_dataset(tmp_path / "run", "npz")
+    dataset = ImageDataset(str(tmp_path), "run", "train", 4)
+    images, actions, rewards = dataset._load_npz_data(0)
+    assert images.shape == (7, 16, 16, 3) and actions.shape == (6, 2) and rewards.shape == (6,)
