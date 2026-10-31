@@ -1,6 +1,4 @@
 from abc import ABC, abstractmethod
-from datasets.ring_buffer import RingBufferDataset
-from datasets.utils import NumUpdatesWrapper
 import gym
 import hydra
 from lightning import LightningModule, Trainer
@@ -12,12 +10,14 @@ from pathlib import Path
 import random
 from rich.progress import TaskID
 import shutil
+from sold.data.ring_buffer import RingBufferDataset
+from sold.data.utils import NumUpdatesWrapper
+from sold.utils.episode_runner import EpisodeRunner
+from sold.utils.logging import LoggingStepMixin
 from termcolor import colored
 import torch
 from torch.utils.data import DataLoader
 from typing import Any
-from utils.episode_runner import EpisodeRunner
-from utils.logging import LoggingStepMixin
 import warnings
 
 

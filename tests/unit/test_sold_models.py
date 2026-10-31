@@ -1,17 +1,17 @@
 """modeling/sold: dynamics model, slot aggregation transformer and predictors."""
 
-from modeling.attention_mask import AlibiMask, CausalMask
-from modeling.distributions import TwoHotEncodingDistribution
-from modeling.positional_encoding import LearnedEncoding, NoPositionalEncoding
-from modeling.sold.dynamics import (
+import pytest
+from sold.modeling.attention_mask import AlibiMask, CausalMask
+from sold.modeling.distributions import TwoHotEncodingDistribution
+from sold.modeling.positional_encoding import LearnedEncoding, NoPositionalEncoding
+from sold.modeling.sold.dynamics import (
     AutoregressiveWrapper,
     OCVPSeqDynamicsModel,
     OCVPSeqLayer,
     make_ocvp_seq_dynamics_model,
 )
-from modeling.sold.prediction import GaussianPredictor, Predictor, RMSNorm, ScalarPredictor, TwoHotPredictor
-from modeling.sold.slot_aggregation_transformer import SlotAggregationTransformer, TransformerEncoderLayer
-import pytest
+from sold.modeling.sold.prediction import GaussianPredictor, Predictor, RMSNorm, ScalarPredictor, TwoHotPredictor
+from sold.modeling.sold.slot_aggregation_transformer import SlotAggregationTransformer, TransformerEncoderLayer
 import torch
 import torch.distributions as D
 

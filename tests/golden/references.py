@@ -5,21 +5,20 @@ A refactor that renames modules, changes state-dict keys or alters the math make
 
 If an output change is intended, regenerate the references from the repository root and review the diff:
 
-    PYTHONPATH=sold:. python -m tests.golden.references
+    python -m tests.golden.references
 
-LEGACY_CHECKPOINT is a tiny SOLD checkpoint in the checkpoint format from before the refactoring (commit 4f6b757),
-with fine-tuning on (five optimizers). Lightning checkpoints pickle SOLDModule's constructor arguments and module paths,
-so it fails to load when a refactor changes either without a compatibility shim. It was generated once with
+LEGACY_CHECKPOINT is a tiny SOLD checkpoint (fine-tuning on, five optimizers) in the format from before the
+refactoring (commit 4f6b757). Checkpoints pickle SOLDModule's constructor arguments and module paths, so it stops
+loading when a refactor changes either without a shim. Generated once with
 
-    PYTHONPATH=sold:. python -m tests.golden.references --legacy-checkpoint
+    python -m tests.golden.references --legacy-checkpoint
 
-Never regenerate it: a checkpoint written by newer code would no longer test old checkpoints. Its reference outputs
-are regenerated with the others.
+Never regenerate it (newer code would write a new-format checkpoint); its reference outputs are regenerated.
 
-test_run_checkpoints.py checks checkpoints of real training runs, which are not in the repository, against references
-written next to them before a refactor:
+test_run_checkpoints.py checks real runs' checkpoints (not in the repository) against references written next to them
+before a refactor:
 
-    PYTHONPATH=sold:. python -m tests.golden.references --run-checkpoints FOLDER
+    python -m tests.golden.references --run-checkpoints FOLDER
 """
 
 import numpy as np
@@ -45,7 +44,7 @@ def _images(seed, batch=1, length=3, size=64):
 
 @torch.no_grad()
 def savi_outputs(checkpoint_path):
-    from train_autoencoder import AutoencoderModule
+    from sold.train_autoencoder import AutoencoderModule
 
     # Not load_autoencoder(): it restores onto the GPU the checkpoint was saved from (see bug #27).
     savi = AutoencoderModule.load_from_checkpoint(str(checkpoint_path), map_location="cpu").autoencoder.eval()
@@ -69,7 +68,7 @@ def _sold_env(image_size, action_dim, max_episode_steps):
 
 def load_sold(checkpoint_path, image_size=(64, 64), action_dim=4, max_episode_steps=50, **overrides):
     """Load a SOLD checkpoint for a fake environment matching its image size and action space."""
-    from train_sold import SOLDModule
+    from sold.train_sold import SOLDModule
 
     env = _sold_env(image_size, action_dim, max_episode_steps)
     return SOLDModule.load_from_checkpoint(str(checkpoint_path), env=env, map_location="cpu", **overrides)

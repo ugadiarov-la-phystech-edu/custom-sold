@@ -1,4 +1,4 @@
-from modeling.autoencoder.cnn.encoder import CnnEncoder
+from sold.modeling.autoencoder.cnn.encoder import CnnEncoder
 import torch
 import torch.nn as nn
 

@@ -62,7 +62,7 @@ if "FakePixel-v0" not in gym.envs.registry.env_specs:
 
 def make_fake_env(image_size=(16, 16), max_episode_steps: int = 8, action_repeat: int = 1, seed=None, **env_kwargs):
     """The real SOLD wrapper stack (suite 'gym') around FakePixelEnv."""
-    from envs import make_env
+    from sold.envs import make_env
 
     env = make_env("gym", "FakePixel-v0", tuple(image_size), max_episode_steps, action_repeat, seed)
     for key, value in env_kwargs.items():
@@ -199,7 +199,7 @@ def install_fake_dm_control(
         "dm_control.suite.wrappers.action_scale": action_scale,
     }.items():
         monkeypatch.setitem(sys.modules, name, module)
-    monkeypatch.delitem(sys.modules, "envs.from_dmcontrol", raising=False)
+    monkeypatch.delitem(sys.modules, "sold.envs.from_dmcontrol", raising=False)
     return loaded
 
 
@@ -246,12 +246,12 @@ def install_fake_gymnasium_and_tensordict(monkeypatch):
     tensordict.TensorDict = FakeTensorDict
     monkeypatch.setitem(sys.modules, "gymnasium", gymnasium)
     monkeypatch.setitem(sys.modules, "tensordict", tensordict)
-    monkeypatch.delitem(sys.modules, "envs.wrappers.to_tensordict", raising=False)
+    monkeypatch.delitem(sys.modules, "sold.envs.wrappers.to_tensordict", raising=False)
 
 
 def install_fake_survival_suite(monkeypatch):
     install_fake_gymnasium_and_tensordict(monkeypatch)
-    module = types.ModuleType("envs.from_survival")
+    module = types.ModuleType("sold.envs.from_survival")
     module.calls = []
 
     def make_env(name, image_size, max_episode_steps, action_repeat, seed=0):
@@ -259,7 +259,7 @@ def install_fake_survival_suite(monkeypatch):
         return FakeGymnasiumEnv()
 
     module.make_env = make_env
-    monkeypatch.setitem(sys.modules, "envs.from_survival", module)
+    monkeypatch.setitem(sys.modules, "sold.envs.from_survival", module)
     return module
 
 

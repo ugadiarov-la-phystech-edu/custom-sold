@@ -11,7 +11,7 @@ experiment: "my_experiment"
 seed: 42
 
 dataset:
-  _target_: datasets.image.load_image_dataset
+  _target_: sold.data.image.load_image_dataset
   # Must be given on the command line: generate_dataset.py writes to ../experiments/generate_dataset/<experiment>/<timestamp>.
   path: ???  # e.g. ../experiments/generate_dataset/my_dataset
   data_dir: ???  # e.g. 2025-04-08_11-29-03
@@ -20,7 +20,7 @@ dataset:
   sequence_length: 8
 
 model:
-  _target_: train_autoencoder.AutoencoderModule
+  _target_: sold.train_autoencoder.AutoencoderModule
   autoencoder: ${..autoencoder}
 
   optimizer:
@@ -30,7 +30,7 @@ model:
 
   scheduler:
     scheduler:
-      _target_: utils.schedulers.LinearWarmupCosineAnnealingLR
+      _target_: sold.utils.schedulers.LinearWarmupCosineAnnealingLR
       _partial_: True
       warmup_epochs: 10  # Number of warmup epochs.
       max_epochs: ${....trainer.max_epochs}

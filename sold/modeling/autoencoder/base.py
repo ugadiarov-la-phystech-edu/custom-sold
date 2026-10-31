@@ -1,9 +1,9 @@
 """Base class defining the interface for all (object-centric and holistic) autoencoders."""
 
 from abc import ABC, abstractmethod
+from sold.utils.visualizations import make_row, stack_rows
 import torch
 import torch.nn as nn
-from utils.visualizations import make_row, stack_rows
 
 
 class Autoencoder(ABC, nn.Module):

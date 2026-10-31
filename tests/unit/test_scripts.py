@@ -1,21 +1,20 @@
 """Functions in the entry-point scripts: train_autoencoder, generate_dataset and evaluate_sold."""
 
 import ast
-import evaluate_sold
 import functools
-import generate_dataset
 from hydra import compose, initialize_config_dir
 from lightning import Trainer
 import numpy as np
 from omegaconf import OmegaConf
 import os
 import pytest
+from sold import evaluate_sold, generate_dataset
+from sold.train_autoencoder import AutoencoderModule, load_autoencoder
 import subprocess
 import sys
 from tests.conftest import CONFIGS_DIR, REPO_DIR, SOLD_DIR, make_tiny_savi, make_tiny_sold
 import torch
 from torch.utils.data import DataLoader, TensorDataset
-from train_autoencoder import AutoencoderModule, load_autoencoder
 
 
 # ------------------------------------------------------------------------------ train_autoencoder
@@ -134,7 +133,7 @@ def test_save_episode_rejects_unknown_format(tmp_path):
 
 # BUGS_AND_PITFALLS.md #13 (fixed).
 def test_savi_pretraining_uses_the_action_that_led_to_the_next_frame(tmp_path):
-    from datasets.image import NPZDataset
+    from sold.data.image import NPZDataset
 
     cfg = OmegaConf.create(
         {
@@ -267,11 +266,10 @@ def test_importing_the_code_leaves_the_process_state_alone():
 import os, warnings
 import gym, hydra, lightning, matplotlib, torch, torchvision  # Third-party imports may have their own effects.
 environ, filters = dict(os.environ), list(warnings.filters)
-import envs, evaluate_sold, generate_dataset, train_autoencoder, train_sold  # noqa: F401
+from sold import envs, evaluate_sold, generate_dataset, train_autoencoder, train_sold  # noqa: F401
 assert dict(os.environ) == environ, set(os.environ.items()) ^ set(environ.items())
 assert list(warnings.filters) == filters, [f for f in warnings.filters if f not in filters]
 """
     environ = {k: v for k, v in os.environ.items() if k not in ("HYDRA_FULL_ERROR", "MUJOCO_GL")}
-    environ["PYTHONPATH"] = str(SOLD_DIR)  # The repository root is the working directory.
     result = subprocess.run([sys.executable, "-c", probe], cwd=REPO_DIR, env=environ, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr[-2000:]

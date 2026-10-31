@@ -1,5 +1,5 @@
 # multi_object_fetch ReachRed with 0 to 4 distractors.
-_target_: envs.make_env
+_target_: sold.envs.make_env
 suite: "mof"  # Should be "mof", "gym", or "dmcontrol".
 name: ReachRed_0to4Distractors_Dense-v1
 image_size: [ 64, 64 ]

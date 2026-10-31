@@ -5,22 +5,21 @@ from dataclasses import asdict, dataclass
 import gym
 import hydra
 from lightning.pytorch.utilities.types import STEP_OUTPUT, OptimizerLRScheduler
-from modeling.autoencoder.base import Autoencoder
-from modeling.autoencoder.losses import reconstruction_loss
-from modeling.distributions import Moments
 import numpy as np
 from omegaconf import DictConfig
 import os
-import rl.losses
-import rl.returns
+from sold import rl
+from sold.modeling.autoencoder.base import Autoencoder
+from sold.modeling.autoencoder.losses import reconstruction_loss
+from sold.modeling.distributions import Moments
+from sold.utils.instantiate import instantiate_trainer
+from sold.utils.module import FreezeParameters
+from sold.utils.training import OnlineModule, print_summary, set_seed
+from sold.utils.visualizations import dynamics_figure, imagination_figures, reward_figures
 import torch
 import torch.distributions as D
 import torch.nn.functional as F
 from typing import Any
-from utils.instantiate import instantiate_trainer
-from utils.module import FreezeParameters
-from utils.training import OnlineModule, print_summary, set_seed
-from utils.visualizations import dynamics_figure, imagination_figures, reward_figures
 
 
 @dataclass(frozen=True)

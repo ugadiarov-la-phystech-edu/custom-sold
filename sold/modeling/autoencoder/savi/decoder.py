@@ -1,5 +1,5 @@
-from modeling.autoencoder.cnn.encoder import CnnEncoder
-from modeling.autoencoder.savi.encoder import ImagePositionalEmbedding
+from sold.modeling.autoencoder.cnn.encoder import CnnEncoder
+from sold.modeling.autoencoder.savi.encoder import ImagePositionalEmbedding
 import torch
 import torch.nn.functional as F
 

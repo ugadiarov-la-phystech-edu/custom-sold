@@ -3,12 +3,12 @@ import hydra
 import json
 from omegaconf import DictConfig
 import os
+from sold.train_sold import SOLDModule
+from sold.utils.training import set_seed
 import torch
 from torchvision import transforms
 from torchvision.io import write_video
 from tqdm import tqdm
-from train_sold import SOLDModule
-from utils.training import set_seed
 
 
 def render_high_res(env: gym.Env) -> torch.Tensor:

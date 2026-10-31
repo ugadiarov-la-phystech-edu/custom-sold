@@ -6,14 +6,14 @@ import os
 from pathlib import Path
 import pytest
 import random
+from sold.utils import training
+from sold.utils.episode_runner import EpisodeRunner
+from sold.utils.training import OnlineProgressBar, print_summary, set_seed
 from tests import fakes
 from tests.conftest import add_episode, make_episode, make_online_trainer, make_tiny_sold
 import torch
 from types import SimpleNamespace
 from unittest import mock
-from utils import training
-from utils.episode_runner import EpisodeRunner
-from utils.training import OnlineProgressBar, print_summary, set_seed
 
 
 def test_set_seed_is_reproducible(monkeypatch):
@@ -141,7 +141,7 @@ def test_on_load_checkpoint_without_replay_buffer(tiny_sold, tmp_path):
 
 
 def test_on_load_checkpoint_rejects_buffer_without_fields(tiny_sold, tmp_path):
-    from datasets.info import EpisodeDatasetInfo
+    from sold.data.info import EpisodeDatasetInfo
 
     tiny_sold._trainer = mock.Mock()
     with mock.patch.object(
@@ -314,7 +314,7 @@ def test_progress_bar_creates_its_display_on_train_start(tiny_sold):
 
 # BUGS_AND_PITFALLS.md #4 (fixed).
 def test_resuming_restores_the_saved_replay_buffer(tiny_sold, tmp_path):
-    from datasets.ring_buffer import RingBufferDataset
+    from sold.data.ring_buffer import RingBufferDataset
 
     saved = RingBufferDataset(20, 2, 3, save_path=str(tmp_path / "saved"))
     add_episode(saved, make_episode(5))
@@ -362,7 +362,7 @@ def test_pruning_keeps_the_newest_replay_buffer(tiny_sold, tmp_path):
 
 # BUGS_AND_PITFALLS.md #6 (fixed).
 def test_latest_checkpoint_loads_without_a_trainer(fitted):
-    from train_sold import SOLDModule
+    from sold.train_sold import SOLDModule
 
     _, _, log_dir = fitted
     checkpoints_dir = log_dir / "checkpoints"

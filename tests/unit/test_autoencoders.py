@@ -2,16 +2,19 @@
 
 import functools
 import hydra
-from modeling.autoencoder.base import Autoencoder
-from modeling.autoencoder.cnn import CnnDecoder, CnnEncoder
-from modeling.autoencoder.cnn.autoencoder import Cnn, get_embedding_dim
-from modeling.autoencoder.cnn.decoder import Decoder
-from modeling.autoencoder.cnn.encoder import SamePadConv2d
-from modeling.autoencoder.logging import LoggingCallback, LogReconstruction
-from modeling.autoencoder.savi import Corrector, SaviCnnDecoder, SaviCnnEncoder
-from modeling.autoencoder.savi.encoder import ImagePositionalEmbedding
-from modeling.autoencoder.savi.initializer import Learned, LearnedRandom, SlotInitializer
-from modeling.autoencoder.savi.predictor import (
+from omegaconf import OmegaConf
+import os
+import pytest
+from sold.modeling.autoencoder.base import Autoencoder
+from sold.modeling.autoencoder.cnn import CnnDecoder, CnnEncoder
+from sold.modeling.autoencoder.cnn.autoencoder import Cnn, get_embedding_dim
+from sold.modeling.autoencoder.cnn.decoder import Decoder
+from sold.modeling.autoencoder.cnn.encoder import SamePadConv2d
+from sold.modeling.autoencoder.logging import LoggingCallback, LogReconstruction
+from sold.modeling.autoencoder.savi import Corrector, SaviCnnDecoder, SaviCnnEncoder
+from sold.modeling.autoencoder.savi.encoder import ImagePositionalEmbedding
+from sold.modeling.autoencoder.savi.initializer import Learned, LearnedRandom, SlotInitializer
+from sold.modeling.autoencoder.savi.predictor import (
     ActionConditionalTransformerPredictor,
     MetaAttention,
     MultiHeadSelfAttention,
@@ -19,9 +22,6 @@ from modeling.autoencoder.savi.predictor import (
     TransformerPredictor,
     init_xavier_,
 )
-from omegaconf import OmegaConf
-import os
-import pytest
 from tests.conftest import CONFIGS_DIR, make_tiny_savi
 import torch
 from unittest import mock
@@ -113,7 +113,7 @@ def test_base_forward_requires_reconstructions():
 
 # BUGS_AND_PITFALLS.md #23 (fixed).
 def test_cnn_autoencoder_config_can_be_instantiated():
-    from utils.instantiate import fill_in_missing
+    from sold.utils.instantiate import fill_in_missing
 
     cfg = OmegaConf.load(CONFIGS_DIR / "autoencoder" / "cnn.yaml")
     fill_in_missing(cfg, {"image_size": [16, 16]})  # As train_autoencoder.py does with the dataset infos.
@@ -204,7 +204,7 @@ def test_transformer_predictors():
     slots = torch.randn(2, 3, 8)
     plain = TransformerPredictor(slot_dim=8, action_dim=2, num_heads=2, mlp_size=16)
     assert torch.equal(plain(slots, torch.zeros(2, 2)), plain(slots, torch.ones(2, 2)))
-    from modeling.autoencoder.savi.predictor import Predictor as SaviPredictor
+    from sold.modeling.autoencoder.savi.predictor import Predictor as SaviPredictor
 
     assert SaviPredictor.forward(None, None, None) is None  # Abstract body.
     conditional = ActionConditionalTransformerPredictor(slot_dim=8, action_dim=2, num_head=2, mlp_size=16)

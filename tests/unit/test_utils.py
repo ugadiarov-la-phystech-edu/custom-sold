@@ -7,15 +7,15 @@ from omegaconf import OmegaConf
 import os
 from pathlib import Path
 import pytest
+from sold.utils import visualizations as vis
+from sold.utils.instantiate import fill_in_missing, instantiate_dataloaders, instantiate_many, instantiate_trainer
+from sold.utils.logging import ExtendedTensorBoardLogger, LoggingStepMixin
+from sold.utils.module import FreezeParameters
+from sold.utils.schedulers import LinearWarmupCosineAnnealingLR
 import sys
 from tests.conftest import write_image_dataset
 import torch
 from unittest import mock
-from utils import visualizations as vis
-from utils.instantiate import fill_in_missing, instantiate_dataloaders, instantiate_many, instantiate_trainer
-from utils.logging import ExtendedTensorBoardLogger, LoggingStepMixin
-from utils.module import FreezeParameters
-from utils.schedulers import LinearWarmupCosineAnnealingLR
 
 
 # ----------------------------------------------------------------------------------- module
@@ -43,10 +43,10 @@ def test_instantiate_trainer(tmp_path):
         {
             "trainer": {"_target_": "lightning.Trainer", "max_epochs": 1, "accelerator": "cpu"},
             "logger": {
-                "tb": {"_target_": "utils.logging.ExtendedTensorBoardLogger", "save_dir": str(tmp_path)},
+                "tb": {"_target_": "sold.utils.logging.ExtendedTensorBoardLogger", "save_dir": str(tmp_path)},
                 "log_to_wandb": False,
             },
-            "callbacks": {"bar": {"_target_": "utils.training.OnlineProgressBar"}},
+            "callbacks": {"bar": {"_target_": "sold.utils.training.OnlineProgressBar"}},
         }
     )
     trainer = instantiate_trainer(cfg)
@@ -58,7 +58,7 @@ def test_instantiate_dataloaders(tmp_path):
     write_image_dataset(tmp_path / "run", "npz")
     cfg = OmegaConf.create(
         {
-            "_target_": "datasets.image.load_image_dataset",
+            "_target_": "sold.data.image.load_image_dataset",
             "path": str(tmp_path),
             "data_dir": "run",
             "sequence_length": 3,
@@ -296,7 +296,7 @@ def test_draw_ticks_and_rewards():
 
 
 def _predictor():
-    from modeling.sold.prediction import TwoHotPredictor
+    from sold.modeling.sold.prediction import TwoHotPredictor
 
     return TwoHotPredictor(
         max_episode_steps=6, num_slots=2, slot_dim=4, token_dim=8, num_heads=2, num_layers=2, hidden_dim=8
@@ -346,7 +346,7 @@ def test_attention_visualizations():
 
 # BUGS_AND_PITFALLS.md #22 (fixed).
 def test_attention_visualization_does_not_stack_forward_wrappers():
-    from modeling.sold.prediction import TwoHotPredictor
+    from sold.modeling.sold.prediction import TwoHotPredictor
 
     model = TwoHotPredictor(
         max_episode_steps=4, num_slots=2, slot_dim=4, token_dim=8, num_heads=2, num_layers=1, hidden_dim=8

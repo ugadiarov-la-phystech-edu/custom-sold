@@ -13,7 +13,7 @@ experiment: "my_experiment"
 seed: 42
 
 model:
-  _target_: train_sold.SOLDModule
+  _target_: sold.train_sold.SOLDModule
 
   max_steps: 10_000_000  # Maximum number of environment steps to train for.
   num_seed: 250  # Start training after 'train_after' random steps.
@@ -45,11 +45,11 @@ model:
   critic_regularization_weight: 0.1  # Weight of the critic's regularization towards the target critic.
 
   autoencoder:
-    _target_: train_autoencoder.load_autoencoder
+    _target_: sold.train_autoencoder.load_autoencoder
     checkpoint_path: ../checkpoints/autoencoder/savi/reach_red/latest.ckpt
 
   dynamics_predictor:
-    _target_: modeling.sold.dynamics.make_ocvp_seq_dynamics_model
+    _target_: sold.modeling.sold.dynamics.make_ocvp_seq_dynamics_model
     _partial_: True
     token_dim: 256
     hidden_dim: 512
@@ -59,7 +59,7 @@ model:
     teacher_forcing: False
 
   actor:
-    _target_: modeling.sold.prediction.GaussianPredictor
+    _target_: sold.modeling.sold.prediction.GaussianPredictor
     _partial_: True
     token_dim: 256
     num_heads: 8
@@ -71,7 +71,7 @@ model:
     init_std: 2.0  # Offset of the std's sigmoid (larger starts closer to max_std).
 
   critic:
-    _target_: modeling.sold.prediction.TwoHotPredictor
+    _target_: sold.modeling.sold.prediction.TwoHotPredictor
     _partial_: True
     token_dim: 256
     num_heads: 8
@@ -81,7 +81,7 @@ model:
     num_bins: 255  # Exponentially spaced two-hot bins.
 
   reward_predictor:
-    _target_: modeling.sold.prediction.TwoHotPredictor
+    _target_: sold.modeling.sold.prediction.TwoHotPredictor
     _partial_: True
     token_dim: 256
     num_heads: 8

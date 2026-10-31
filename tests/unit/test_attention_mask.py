@@ -1,7 +1,7 @@
 import math
 import matplotlib.pyplot as plt
-from modeling.attention_mask import AlibiMask, CausalMask, fill_with_neg_inf
 import pytest
+from sold.modeling.attention_mask import AlibiMask, CausalMask, fill_with_neg_inf
 import torch
 
 NEG_INF = float("-inf")

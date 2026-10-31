@@ -1,2 +1,2 @@
 progress_bar:
-  _target_: utils.training.OnlineProgressBar
+  _target_: sold.utils.training.OnlineProgressBar

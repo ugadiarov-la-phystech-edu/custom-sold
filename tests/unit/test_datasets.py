@@ -2,13 +2,13 @@
 
 from collections import deque
 import copy
-from datasets.image import ImageDataset, NPZDataset, PNGDataset, load_image_dataset
-from datasets.info import ColorImage, EpisodeDatasetInfo, Fields, FieldType, Scalar, TensorType, Vector
-from datasets.ring_buffer import EpisodeDataset, RingBufferDataset
-from datasets.utils import NumUpdatesWrapper
 import logging
 import numpy as np
 import pytest
+from sold.data.image import ImageDataset, NPZDataset, PNGDataset, load_image_dataset
+from sold.data.info import ColorImage, EpisodeDatasetInfo, Fields, FieldType, Scalar, TensorType, Vector
+from sold.data.ring_buffer import EpisodeDataset, RingBufferDataset
+from sold.data.utils import NumUpdatesWrapper
 from tests.conftest import add_episode, make_episode, write_image_dataset
 import torch
 
@@ -78,7 +78,7 @@ def buffer(tmp_path):
 
 
 def test_ring_buffer_starts_empty(buffer, recwarn):
-    from datasets.info import EpisodeDatasetInfoMixin
+    from sold.data.info import EpisodeDatasetInfoMixin
 
     assert buffer.is_empty and len(buffer) == 0 and buffer.fields is None
     assert EpisodeDatasetInfoMixin.is_empty.fget(buffer)  # Overridden by RingBufferDataset.
@@ -147,7 +147,7 @@ def test_ring_buffer_is_empty_warns_when_episodes_are_too_short(buffer):
 
 
 def test_ring_buffer_files_and_load_from_disk_storage(buffer, tmp_path, caplog):
-    with caplog.at_level(logging.INFO, logger="datasets.ring_buffer"):
+    with caplog.at_level(logging.INFO, logger="sold.data.ring_buffer"):
         add_episode(buffer, make_episode(4))
     assert "Total estimated replay buffer size (GB)" in caplog.text
     buffer.ring_buffer["obs"].flush()

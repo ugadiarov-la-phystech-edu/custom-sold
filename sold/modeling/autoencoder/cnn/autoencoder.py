@@ -1,5 +1,5 @@
-from modeling.autoencoder.base import Autoencoder
-from modeling.autoencoder.cnn import CnnDecoder, CnnEncoder
+from sold.modeling.autoencoder.base import Autoencoder
+from sold.modeling.autoencoder.cnn import CnnDecoder, CnnEncoder
 import torch
 
 

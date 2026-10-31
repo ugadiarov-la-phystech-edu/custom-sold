@@ -1,10 +1,10 @@
 from abc import ABC, abstractmethod
 from collections import defaultdict, deque
-from datasets.info import EpisodeDatasetInfo, EpisodeDatasetInfoMixin, Fields
 import logging
 import numpy as np
 import os
 import shutil
+from sold.data.info import EpisodeDatasetInfo, EpisodeDatasetInfoMixin, Fields
 import torch
 from tqdm import tqdm
 from typing import Any

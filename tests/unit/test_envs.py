@@ -1,14 +1,14 @@
 """envs: wrappers, make_env for every suite, multi_object_fetch distractor sampling, dm_control adapters."""
 
-import envs
-from envs.wrappers.action_repeat import ActionRepeat
-from envs.wrappers.pixels import Pixels
-from envs.wrappers.time_limit import TimeLimit
-from envs.wrappers.to_tensor import ToTensor
 import importlib
 import numpy as np
 import os
 import pytest
+from sold import envs
+from sold.envs.wrappers.action_repeat import ActionRepeat
+from sold.envs.wrappers.pixels import Pixels
+from sold.envs.wrappers.time_limit import TimeLimit
+from sold.envs.wrappers.to_tensor import ToTensor
 import sys
 from tests import fakes
 import torch
@@ -101,7 +101,7 @@ def test_make_env_rejects_unknown_suite():
 
 
 def test_make_env_mof_suite(monkeypatch):
-    import envs.from_mof as from_mof
+    import sold.envs.from_mof as from_mof
 
     created = []
 
@@ -125,7 +125,7 @@ def test_make_env_mof_suite(monkeypatch):
 
 
 def test_make_env_mof_suite_without_seed(monkeypatch):
-    import envs.from_mof as from_mof
+    import sold.envs.from_mof as from_mof
 
     seeds = []
     monkeypatch.setattr(
@@ -146,14 +146,14 @@ def test_make_env_survival_suite_with_fake_module(monkeypatch):
     survival = fakes.install_fake_survival_suite(monkeypatch)
     env = envs.make_env("survival", "Forage", (8, 8), 10, 1, seed=3)
     assert survival.calls == [("Forage", (8, 8), 10, 1, 3)]
-    from envs.wrappers.to_tensordict import ToTensorDict
+    from sold.envs.wrappers.to_tensordict import ToTensorDict
 
     assert isinstance(env, ToTensor) and isinstance(env.env, ToTensorDict)
 
 
 def test_to_tensor_dict_with_fake_modules(monkeypatch):
     fakes.install_fake_gymnasium_and_tensordict(monkeypatch)
-    to_tensordict = importlib.import_module("envs.wrappers.to_tensordict")
+    to_tensordict = importlib.import_module("sold.envs.wrappers.to_tensordict")
     inner = fakes.FakeGymnasiumEnv()
     env = to_tensordict.ToTensorDict(inner)
     obs, info = env.reset()
@@ -175,7 +175,7 @@ def test_survival_suite_is_usable_or_rejected_cleanly():
 
 # BUGS_AND_PITFALLS.md #12 (fixed).
 def test_distractor_wrapper_does_not_leak_environments(monkeypatch):
-    import envs.from_mof as from_mof
+    import sold.envs.from_mof as from_mof
 
     created = []
 
@@ -195,8 +195,8 @@ def test_distractor_wrapper_does_not_leak_environments(monkeypatch):
 def test_pixels_wrapper_does_not_require_multi_object_fetch(monkeypatch):
     monkeypatch.setitem(sys.modules, "multi_object_fetch", None)
     monkeypatch.setitem(sys.modules, "multi_object_fetch.env", None)
-    monkeypatch.delitem(sys.modules, "envs.wrappers.pixels")
-    pixels = importlib.import_module("envs.wrappers.pixels")
+    monkeypatch.delitem(sys.modules, "sold.envs.wrappers.pixels")
+    pixels = importlib.import_module("sold.envs.wrappers.pixels")
     assert pixels.Pixels(fakes.FakePixelEnv(), (8, 8)).reset().shape == (3, 8, 8)
 
 
@@ -210,7 +210,7 @@ def test_pixels_observation_matches_observation_space_for_non_square_sizes():
 @pytest.fixture
 def dmc(monkeypatch):
     loaded = fakes.install_fake_dm_control(monkeypatch)
-    module = importlib.import_module("envs.from_dmcontrol")
+    module = importlib.import_module("sold.envs.from_dmcontrol")
     return module, loaded
 
 

@@ -51,7 +51,7 @@ remote() {
 # ---------------------------------------------------------------------------- copy the clone
 cd "$REPO_DIR"
 git ls-files -z --cached --others --exclude-standard | grep -z -v -E '^(checkpoints|paper)/' \
-    | tar --null -czf - -T - \
+    | tar --null --ignore-failed-read -czf - -T - \
     | remote "rm -rf $REMOTE_DIR && mkdir -p $REMOTE_DIR && tar xzf - -C $REMOTE_DIR \
               && ln -s $REMOTE_REPO/checkpoints $REMOTE_DIR/checkpoints"
 

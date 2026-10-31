@@ -38,7 +38,7 @@ Each open code issue in `BUGS_AND_PITFALLS.md` has a test next to the related un
 - **Unit or integration test:** behavior changed. If the change is intended, update the test in the same commit.
 - **Golden test:** outputs or state-dict keys changed. Renamed modules break loading of the released checkpoints. If the numeric change is intended, regenerate the references and review the diff:
   ```bash
-  PYTHONPATH=sold:. python -m tests.golden.references
+  python -m tests.golden.references
   ```
 - **Legacy checkpoint tests (`test_legacy_sold_checkpoint*`, `test_sold_checkpoint_loads_every_weight[legacy]`):** the checkpoint format changed (a moved module or a changed `SOLDModule` constructor), so existing checkpoints no longer load. Add a compatibility shim; never regenerate `legacy_tiny_sold.ckpt`.
 - **`XPASS(strict)` failure:** a known bug is fixed, so its xfail test now passes and fails the run. Remove the `xfail` marker, replace it with a `# BUGS_AND_PITFALLS.md #<number> (fixed).` comment, and mark the item fixed in `BUGS_AND_PITFALLS.md`. Regression tests that document the buggy behavior (for example the `(3, 6, 8)` shape in `unit/test_envs.py`) are commented with the bug number and must be updated at the same time.

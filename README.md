@@ -20,6 +20,10 @@ Then add the SOLD dependencies to the conda environment by running:
 ```bash
 conda env update -n mof -f apptainer/environment.yml
 ```
+Then install this repository's `sold` package into the environment (editable, so changes apply directly):
+```bash
+pip install --no-deps -e .
+```
 
 ### Apptainer
 Alternatively, we provide an [`Apptainer`](apptainer/multi_object_fetch.def) build file to simplify installation.

@@ -1,8 +1,8 @@
 from collections.abc import Callable
-from envs.from_gym import make_env as make_gym_env
 import gym
 import numpy as np
 import random
+from sold.envs.from_gym import make_env as make_gym_env
 
 
 class VariableDistractorsWrapper(gym.Wrapper):

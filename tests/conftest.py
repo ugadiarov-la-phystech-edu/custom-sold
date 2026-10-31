@@ -13,6 +13,7 @@ matplotlib.use("Agg")
 
 import numpy as np
 import pytest
+import sold  # noqa: F401  (resolves the module names of old checkpoints)
 from tests import fakes  # noqa: F401  (registers FakePixel-v0)
 import torch
 
@@ -46,12 +47,12 @@ def require_checkpoint(relative_path: str) -> Path:
 # ------------------------------------------------------------------------------- tiny models
 def make_tiny_savi(image_size=(16, 16), num_slots=2, slot_dim=8, action_dim=2, action_conditional=False):
     """A SAVi with the same structure as configs/autoencoder/savi.yaml, at toy size."""
-    from modeling.autoencoder.savi import Corrector
-    from modeling.autoencoder.savi.autoencoder import SAVi
-    from modeling.autoencoder.savi.decoder import SaviCnnDecoder
-    from modeling.autoencoder.savi.encoder import SaviCnnEncoder
-    from modeling.autoencoder.savi.initializer import Learned
-    from modeling.autoencoder.savi.predictor import ActionConditionalTransformerPredictor, TransformerPredictor
+    from sold.modeling.autoencoder.savi import Corrector
+    from sold.modeling.autoencoder.savi.autoencoder import SAVi
+    from sold.modeling.autoencoder.savi.decoder import SaviCnnDecoder
+    from sold.modeling.autoencoder.savi.encoder import SaviCnnEncoder
+    from sold.modeling.autoencoder.savi.initializer import Learned
+    from sold.modeling.autoencoder.savi.predictor import ActionConditionalTransformerPredictor, TransformerPredictor
 
     predictor_class = ActionConditionalTransformerPredictor if action_conditional else TransformerPredictor
     return SAVi(
@@ -66,8 +67,8 @@ def make_tiny_savi(image_size=(16, 16), num_slots=2, slot_dim=8, action_dim=2, a
 
 
 def tiny_sold_kwargs(env, autoencoder=None, **overrides):
-    from modeling.sold.dynamics import make_ocvp_seq_dynamics_model
-    from modeling.sold.prediction import GaussianPredictor, TwoHotPredictor
+    from sold.modeling.sold.dynamics import make_ocvp_seq_dynamics_model
+    from sold.modeling.sold.prediction import GaussianPredictor, TwoHotPredictor
 
     predictor = dict(token_dim=8, num_heads=2, num_layers=1, hidden_dim=16, num_mlp_layers=1)
     kwargs = dict(
@@ -116,7 +117,7 @@ def tiny_sold_kwargs(env, autoencoder=None, **overrides):
 
 
 def make_tiny_sold(env=None, **overrides):
-    from train_sold import SOLDModule
+    from sold.train_sold import SOLDModule
 
     env = env if env is not None else fakes.make_fake_env()
     return SOLDModule(**tiny_sold_kwargs(env, **overrides))
@@ -140,8 +141,8 @@ def tiny_sold(fake_env):
 def make_online_trainer(tmp_path, **kwargs):
     """A Lightning trainer configured like configs/trainer/online.yaml + callbacks/sold.yaml, on CPU."""
     from lightning import Trainer
-    from utils.logging import ExtendedTensorBoardLogger
-    from utils.training import OnlineProgressBar
+    from sold.utils.logging import ExtendedTensorBoardLogger
+    from sold.utils.training import OnlineProgressBar
 
     params = dict(
         max_steps=-1,

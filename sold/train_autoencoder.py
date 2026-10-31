@@ -2,16 +2,16 @@ from collections.abc import Callable, Iterable
 import hydra
 from lightning import LightningModule
 from lightning.pytorch.utilities.types import STEP_OUTPUT, Optimizer, OptimizerLRScheduler
-from modeling.autoencoder.base import Autoencoder
-from modeling.autoencoder.losses import reconstruction_loss
 from omegaconf import DictConfig
 import os
+from sold.modeling.autoencoder.base import Autoencoder
+from sold.modeling.autoencoder.losses import reconstruction_loss
+from sold.utils.instantiate import fill_in_missing, instantiate_dataloaders, instantiate_trainer
+from sold.utils.logging import LoggingStepMixin
+from sold.utils.training import set_seed
 from termcolor import colored
 import torch
 from typing import Any
-from utils.instantiate import fill_in_missing, instantiate_dataloaders, instantiate_trainer
-from utils.logging import LoggingStepMixin
-from utils.training import set_seed
 
 
 class AutoencoderModule(LoggingStepMixin, LightningModule):

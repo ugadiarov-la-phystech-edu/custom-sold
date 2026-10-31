@@ -1,5 +1,5 @@
 from collections.abc import Iterator
-from datasets.ring_buffer import RingBufferDataset
+from sold.data.ring_buffer import RingBufferDataset
 from torch.utils.data import IterableDataset
 
 

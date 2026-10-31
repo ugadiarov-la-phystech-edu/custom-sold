@@ -13,6 +13,6 @@ progress_bar:
   _target_: lightning.pytorch.callbacks.RichProgressBar
 
 savi_decomposition:
-  _target_: modeling.autoencoder.logging.LogReconstruction
+  _target_: sold.modeling.autoencoder.logging.LogReconstruction
   every_n_epochs: 10
   save_dir: "images"

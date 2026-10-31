@@ -1,7 +1,7 @@
-from envs.from_gym import make_env as make_gym_env
-from envs.wrappers.to_tensor import ToTensor
 import gym
 import os
+from sold.envs.from_gym import make_env as make_gym_env
+from sold.envs.wrappers.to_tensor import ToTensor
 from typing import Optional
 
 
@@ -17,21 +17,21 @@ def make_env(
     if suite == "gym":
         env = make_gym_env(name, image_size, max_episode_steps, action_repeat, seed)
     elif suite == "mof":
-        from envs.from_mof import make_env as make_mof_env
+        from sold.envs.from_mof import make_env as make_mof_env
 
         env = make_mof_env(name, image_size, max_episode_steps, action_repeat, seed)
     elif suite == "dmcontrol":
-        from envs.from_dmcontrol import make_env as make_dmcontrol_env
+        from sold.envs.from_dmcontrol import make_env as make_dmcontrol_env
 
         env = make_dmcontrol_env(name, image_size, max_episode_steps, action_repeat, seed)
     elif suite == "survival":
         try:
-            from envs.from_survival import make_env as make_survival_env
+            from sold.envs.from_survival import make_env as make_survival_env
         except ModuleNotFoundError as error:
             raise ValueError(
                 "The 'survival' suite needs envs/from_survival.py, which is not part of this repository."
             ) from error
-        from envs.wrappers.to_tensordict import ToTensorDict
+        from sold.envs.wrappers.to_tensordict import ToTensorDict
 
         env = make_survival_env(name, image_size, max_episode_steps, action_repeat, seed)
         env = ToTensorDict(env)

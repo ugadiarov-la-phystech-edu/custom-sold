@@ -1,8 +1,8 @@
 from .slot_aggregation_transformer import SlotAggregationTransformer
 from collections.abc import Callable
-from modeling.attention_mask import AlibiMask
-from modeling.distributions import TwoHotEncodingDistribution
-from modeling.positional_encoding import NoPositionalEncoding
+from sold.modeling.attention_mask import AlibiMask
+from sold.modeling.distributions import TwoHotEncodingDistribution
+from sold.modeling.positional_encoding import NoPositionalEncoding
 import torch
 import torch.distributions as D
 import torch.nn as nn

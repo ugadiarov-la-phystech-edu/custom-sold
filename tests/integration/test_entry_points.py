@@ -1,19 +1,16 @@
 """Run the four Hydra entry points in-process with the real configs, a fake environment and toy model sizes."""
 
-import evaluate_sold
-import generate_dataset
 from hydra.core.global_hydra import GlobalHydra
 import json
 import os
 import pl_bolts.optimizers.lr_scheduler  # noqa: F401  (import with the real wandb, before any fake)
 import pytest
 import shutil
+from sold import evaluate_sold, generate_dataset, train_autoencoder, train_sold
 import sys
 from tests import fakes
 from tests.conftest import make_tiny_savi
 import torch
-import train_autoencoder
-import train_sold
 
 pytestmark = pytest.mark.slow
 

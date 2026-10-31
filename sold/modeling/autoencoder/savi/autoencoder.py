@@ -1,9 +1,9 @@
 import math
-from modeling.autoencoder.base import Autoencoder
-from modeling.autoencoder.savi import Corrector, Predictor, SaviCnnDecoder, SaviCnnEncoder, SlotInitializer
-from modeling.autoencoder.savi.predictor import init_xavier_
+from sold.modeling.autoencoder.base import Autoencoder
+from sold.modeling.autoencoder.savi import Corrector, Predictor, SaviCnnDecoder, SaviCnnEncoder, SlotInitializer
+from sold.modeling.autoencoder.savi.predictor import init_xavier_
+from sold.utils.visualizations import create_segmentation_overlay, draw_ticks, make_row, slot_color, stack_rows
 import torch
-from utils.visualizations import create_segmentation_overlay, draw_ticks, make_row, slot_color, stack_rows
 
 
 class SAVi(Autoencoder):

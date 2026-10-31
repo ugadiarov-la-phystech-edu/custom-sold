@@ -1,9 +1,9 @@
 """rl.returns and rl.losses: SOLD's behavior-learning math as pure functions."""
 
-from modeling.distributions import TwoHotEncodingDistribution
 import pytest
-from rl.losses import actor_loss, critic_loss
-from rl.returns import ema_update, lambda_returns
+from sold.modeling.distributions import TwoHotEncodingDistribution
+from sold.rl.losses import actor_loss, critic_loss
+from sold.rl.returns import ema_update, lambda_returns
 import torch
 
 NO_NORMALIZATION = (0.0, 1.0)  # offset, invscale

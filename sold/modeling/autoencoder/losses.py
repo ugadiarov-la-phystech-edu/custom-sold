@@ -1,4 +1,4 @@
-from modeling.autoencoder.base import Autoencoder
+from sold.modeling.autoencoder.base import Autoencoder
 import torch
 import torch.nn.functional as F
 from typing import Any

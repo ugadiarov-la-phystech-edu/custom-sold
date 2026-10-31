@@ -1,9 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sold"
+version = "0.1.0"
+description = "SOLD: Slot-Attention for Object-centric Latent Dynamics"
+requires-python = ">=3.10"
+# Dependencies are pinned and installed by update_mof_text_env.sh.
+
+[tool.setuptools.packages.find]
+include = ["sold*"]
+
 # Test configuration only; SOLD itself is run from the sold/ folder (see README).
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# sold/ must come first: its packages (datasets, envs, utils, ...) are imported by top-level name.
-pythonpath = ["sold", "."]
+pythonpath = ["."]  # The sold package and tests, without installing.
 addopts = "-ra --strict-markers"
 timeout = 600
 markers = [
@@ -61,7 +74,6 @@ force-sort-within-sections = true
 [tool.mypy]
 # Type-checked: modules free of Lightning, Hydra and environment state; imports are followed silently.
 python_version = "3.11"
-mypy_path = "sold"
 files = [
     "sold/rl",
     "sold/modeling/distributions.py",

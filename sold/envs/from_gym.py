@@ -1,7 +1,7 @@
-from envs.wrappers.action_repeat import ActionRepeat
-from envs.wrappers.pixels import Pixels
-from envs.wrappers.time_limit import TimeLimit
 import gym
+from sold.envs.wrappers.action_repeat import ActionRepeat
+from sold.envs.wrappers.pixels import Pixels
+from sold.envs.wrappers.time_limit import TimeLimit
 
 
 def make_env(

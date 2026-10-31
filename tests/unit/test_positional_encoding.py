@@ -1,12 +1,12 @@
 import math
-from modeling.positional_encoding import (
+import pytest
+from sold.modeling.positional_encoding import (
     LearnedEncoding,
     NoPositionalEncoding,
     SinusoidalEncoding,
     SinusoidalPositionalEncoding,
     TokenWiseSinusoidalPositionalEncoding,
 )
-import pytest
 import torch
 
 

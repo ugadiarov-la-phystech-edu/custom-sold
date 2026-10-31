@@ -1,13 +1,13 @@
-_target_: modeling.autoencoder.cnn.autoencoder.Cnn
+_target_: sold.modeling.autoencoder.cnn.autoencoder.Cnn
 
 encoder:
-  _target_: modeling.autoencoder.cnn.encoder.CnnEncoder
+  _target_: sold.modeling.autoencoder.cnn.encoder.CnnEncoder
   num_channels: [ 32, 64, 128, 256 ]
   kernel_sizes: [ 4, 4, 4, 4 ]
   strides: [ 1, 2, 2, 2 ]
 
 decoder:
-  _target_: modeling.autoencoder.cnn.decoder.CnnDecoder
+  _target_: sold.modeling.autoencoder.cnn.decoder.CnnDecoder
   _partial_: True
   image_size: '???'
   num_channels: [ 256, 128, 64, 32 ]

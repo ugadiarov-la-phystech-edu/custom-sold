@@ -1,5 +1,5 @@
-from modeling.distributions import Moments, TwoHotEncodingDistribution, symexp, symlog
 import pytest
+from sold.modeling.distributions import Moments, TwoHotEncodingDistribution, symexp, symlog
 import torch
 import torch.nn.functional as F
 

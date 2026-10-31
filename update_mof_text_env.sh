@@ -124,6 +124,8 @@ printf "%s\n" "${CONSTRAINTS[@]}" "${PACKAGES[@]}" > "$CONSTRAINTS_FILE"
 
 log "Installing SOLD dependencies"
 python -m pip install -c "$CONSTRAINTS_FILE" "${PACKAGES[@]}"
+log "Installing the sold package (editable)"
+python -m pip install --no-deps -e "$REPO_DIR"
 
 log "Checking installed packages"
 python -m pip check

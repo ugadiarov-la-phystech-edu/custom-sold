@@ -3,10 +3,10 @@ from dm_control import suite
 from dm_control.suite.wrappers import action_scale
 import dm_env
 from dm_env import StepType, specs
-from envs.wrappers.pixels import Pixels
-from envs.wrappers.time_limit import TimeLimit
 import gym
 import numpy as np
+from sold.envs.wrappers.pixels import Pixels
+from sold.envs.wrappers.time_limit import TimeLimit
 from typing import Any, NamedTuple
 
 

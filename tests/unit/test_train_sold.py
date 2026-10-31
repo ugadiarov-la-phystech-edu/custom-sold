@@ -1,17 +1,16 @@
 """train_sold.SOLDModule: construction, losses, imagination and action selection."""
 
 import copy
-from modeling.autoencoder.losses import reconstruction_loss
-from modeling.distributions import TwoHotEncodingDistribution
 import numpy as np
 from pathlib import Path
 import pytest
-import rl.losses
-import rl.returns
+from sold import rl
+from sold.modeling.autoencoder.losses import reconstruction_loss
+from sold.modeling.distributions import TwoHotEncodingDistribution
+from sold.train_sold import OptimizerSettings, SOLDModule, optimization_settings
 from tests import fakes
 from tests.conftest import make_online_trainer, make_tiny_sold, tiny_sold_kwargs
 import torch
-from train_sold import OptimizerSettings, SOLDModule, optimization_settings
 
 
 class LogRecorder:
@@ -211,8 +210,8 @@ def test_visualizations_after_evaluation(tiny_sold):
 
 def test_visualizations_without_slot_masks():
     import functools
-    from modeling.autoencoder.cnn import CnnDecoder, CnnEncoder
-    from modeling.autoencoder.cnn.autoencoder import Cnn
+    from sold.modeling.autoencoder.cnn import CnnDecoder, CnnEncoder
+    from sold.modeling.autoencoder.cnn.autoencoder import Cnn
 
     autoencoder = Cnn(
         CnnEncoder([4, 4], [3, 3], [2, 2]),
@@ -327,7 +326,7 @@ def test_autoencoder_optimizer_state_is_checkpointed(tmp_path):
 
 # BUGS_AND_PITFALLS.md #17 (fixed).
 def test_no_autoencoder_graph_without_finetuning(tmp_path, monkeypatch):
-    import train_sold
+    from sold import train_sold
 
     recorded = []
     original = train_sold.reconstruction_loss

@@ -1,5 +1,5 @@
-from modeling.attention_mask import AttentionMask
-from modeling.positional_encoding import PositionalEncoding
+from sold.modeling.attention_mask import AttentionMask
+from sold.modeling.positional_encoding import PositionalEncoding
 import torch
 from torch import Tensor, nn
 from torch.nn import Dropout, Linear, Module, MultiheadAttention, RMSNorm
