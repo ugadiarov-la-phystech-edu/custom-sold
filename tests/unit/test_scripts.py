@@ -9,6 +9,7 @@ import sys
 import numpy as np
 import pytest
 import torch
+from hydra import compose, initialize_config_dir
 from lightning import Trainer
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader, TensorDataset
@@ -177,6 +178,15 @@ def test_evaluation_updates_the_last_action():
 
 
 # ---------------------------------------------------------------------------------- all scripts
+@pytest.mark.parametrize("environment", ["reach_red", "push_red", "pick_red"])
+def test_training_and_evaluation_share_the_environment_configs(environment):
+    with initialize_config_dir(config_dir=str(CONFIGS_DIR), version_base=None):
+        train = compose("train_sold", overrides=[f"environment@model.env={environment}"]).model.env
+        evaluate = compose("evaluate_sold", overrides=[f"environment@env={environment}"]).env
+    assert train == evaluate
+    assert train.name.lower().startswith(environment.replace("_", ""))
+
+
 # BUGS_AND_PITFALLS.md #16 (fixed).
 def test_all_scripts_use_the_same_hydra_version_base():
     version_bases = {}

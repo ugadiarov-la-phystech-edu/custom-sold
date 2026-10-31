@@ -1,0 +1,6 @@
+# Like reach_red, for multi_object_fetch PickRed.
+defaults:
+  - reach_red
+  - _self_
+
+name: PickRed_0to4Distractors_Dense-v1

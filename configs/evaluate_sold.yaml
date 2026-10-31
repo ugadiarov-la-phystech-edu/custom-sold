@@ -1,4 +1,5 @@
 defaults:
+  - environment@env: reach_red  # e.g. environment@env=push_red
   - hydra: default
   - _self_
 
@@ -6,12 +7,3 @@ checkpoint_path: "CHECKPOINT_PATH(S)"  # Can be one checkpoint or a directory of
 experiment: "my_experiment"
 eval_episodes: 5
 seed: 42
-
-env:
-  _target_: envs.make_env
-  suite: "mof"  # Should be "mof", "gym", or "dmcontrol".
-  name: ReachRed_0to4Distractors_Dense-v1
-  image_size: [ 64, 64 ]
-  max_episode_steps: 50
-  action_repeat: 2
-  seed: ${seed}

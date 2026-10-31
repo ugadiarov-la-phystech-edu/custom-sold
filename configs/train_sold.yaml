@@ -1,5 +1,6 @@
 # @package _global_
 defaults:
+  - environment@model.env: reach_red  # e.g. environment@model.env=push_red
   - callbacks: sold
   - hydra: default
   - logger: tensorboard
@@ -46,15 +47,6 @@ model:
   discount_factor: 0.96  # Discount factor used to compute returns.
   critic_ema_decay: 0.98  # Exponential moving average decay for the critic target network.
   critic_regularization_weight: 0.1  # Weight of the critic's regularization towards the target critic.
-
-  env:
-    _target_: envs.make_env
-    suite: "mof"  # Should be "mof", "gym", or "dmcontrol".
-    name: ReachRed_0to4Distractors_Dense-v1
-    image_size: [ 64, 64 ]
-    max_episode_steps: 50
-    action_repeat: 2
-    seed: ${seed}  # Makes the environment reproducible (generate_dataset.yaml stays unseeded on purpose).
 
   autoencoder:
     _target_: train_autoencoder.load_autoencoder

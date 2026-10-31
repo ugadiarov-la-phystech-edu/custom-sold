@@ -1,0 +1,6 @@
+# Like reach_red, for multi_object_fetch PushRed.
+defaults:
+  - reach_red
+  - _self_
+
+name: PushRed_0to4Distractors_Dense-v1
