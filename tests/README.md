@@ -9,10 +9,13 @@ pytest -rx                           # List the known bugs (xfail) with their BU
 pytest -m "not mujoco and not slow"  # Quick run without MuJoCo rendering or full script runs
 ```
 
+`scripts/check.sh` runs lint, format and type checks and the tests with coverage.
+
 To run the suite on a remote GPU machine without touching its working copy (settings in the script's header, or in a gitignored `scripts/remote_test.env`):
 
 ```bash
-scripts/remote_test.sh -q --cov
+scripts/remote_test.sh -q --cov      # The test suite
+scripts/remote_test.sh --check -q    # All checks (scripts/check.sh)
 ```
 
 The suite takes under a minute on CPU. Tests never use the GPU, except `test_savi_checkpoints_saved_on_gpu_load_on_cpu` in `unit/test_scripts.py`, which needs one to create a GPU checkpoint.

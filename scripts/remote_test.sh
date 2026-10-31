@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 #
-# Run the test suite on a remote GPU machine without touching its working copy.
+# Run the test suite (or all checks) on a remote GPU machine without touching its working copy.
 #
 # Copies the tracked and untracked (non-ignored) files of this clone, except checkpoints/ and paper/, to a scratch
 # directory on the remote machine, links the remote repository's checkpoints/ into it (the golden tests need the real
-# LFS files), and runs pytest there at low priority so running trainings are not slowed down.
+# LFS files), and runs pytest (or scripts/check.sh) there at low priority so running trainings are not slowed down.
 #
 # Usage:
-#   scripts/remote_test.sh [PYTEST_ARGS...]        e.g. scripts/remote_test.sh -q --cov
+#   scripts/remote_test.sh [PYTEST_ARGS...]           e.g. scripts/remote_test.sh -q --cov
+#   scripts/remote_test.sh --check [PYTEST_ARGS...]   all checks (scripts/check.sh): lint, format, types, tests
 #
 # Settings come from the environment or from scripts/remote_test.env (gitignored), for example:
 #   REMOTE_HOST=user@gpu-host           # required
@@ -55,7 +56,12 @@ git ls-files -z --cached --others --exclude-standard | grep -z -v -E '^(checkpoi
     | remote "rm -rf $REMOTE_DIR && mkdir -p $REMOTE_DIR && tar xzf - -C $REMOTE_DIR \
               && ln -s $REMOTE_REPO/checkpoints $REMOTE_DIR/checkpoints"
 
-# ------------------------------------------------------------------------------- run pytest
+# ------------------------------------------------------------------------- run pytest or check.sh
+command="python -m pytest"
+if [[ "${1:-}" == "--check" ]]; then
+    command="scripts/check.sh"
+    shift
+fi
 pytest_args=""
 [[ $# -gt 0 ]] && printf -v pytest_args ' %q' "$@"
 
@@ -65,5 +71,7 @@ set -e
 ${REMOTE_CONDA_SH:+source $REMOTE_CONDA_SH}
 conda activate $REMOTE_CONDA_ENV
 cd $REMOTE_DIR
-OMP_NUM_THREADS=$REMOTE_THREADS MKL_NUM_THREADS=$REMOTE_THREADS nice -n 10 python -m pytest -p no:cacheprovider $pytest_args
+export OMP_NUM_THREADS=$REMOTE_THREADS MKL_NUM_THREADS=$REMOTE_THREADS PYTEST_ADDOPTS="-p no:cacheprovider"
+export MYPY_CACHE_DIR=$REMOTE_DIR.mypy_cache  # Survives the scratch directory's recreation.
+nice -n 10 $command $pytest_args
 EOF
