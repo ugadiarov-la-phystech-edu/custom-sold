@@ -1,0 +1,7 @@
+# @package _global_
+# push_red on PickRed, with the PushRed SAVi frozen (there is no PickRed SAVi; same objects, 8 slots).
+defaults:
+  - push_red
+  - override /environment@model.env: pick_red
+
+experiment: pick_red_4layers_savi8_frozen

@@ -1,0 +1,10 @@
+# @package _global_
+# pick_red_frozen, but fine-tuning the SAVi with the paper's settings (lr 3e-5, clip 0.05).
+defaults:
+  - pick_red_frozen
+
+experiment: pick_red_4layers_savi8_finetune
+
+model:
+  finetune_autoencoder: True
+  autoencoder_learning_rate: 0.00003  # Clip 0.05 is the default.

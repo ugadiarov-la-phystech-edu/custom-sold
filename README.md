@@ -66,6 +66,11 @@ Then, to start the training, run:
 ```bash
 python train_sold.py
 ```
+
+Complete run setups for the PushRed and PickRed tasks are in [`configs/preset`](./configs/preset), e.g.:
+```bash
+python train_sold.py preset=pick_red_finetune
+```
 All results are stored in the [`experiments`](./experiments) directory.
 
 

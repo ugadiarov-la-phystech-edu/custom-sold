@@ -6,6 +6,7 @@ defaults:
   - logger: tensorboard
   - trainer: online
   - _self_
+  - preset: null  # Run setup from configs/preset/, e.g. preset=pick_red_finetune.
 
 checkpoint: ""
 experiment: "my_experiment"

@@ -1,0 +1,21 @@
+# @package _global_
+# SOLD on PushRed as in the paper: pretrained PushRed SAVi (8 slots), 4-layer transformers.
+# Checkpoints exclude the replay buffer, so a resumed run starts with an empty one.
+defaults:
+  - override /environment@model.env: push_red
+
+experiment: push_red_4layers_savi8
+
+model:
+  max_steps: 20_000_000
+  eval_freq: 10_000
+  num_eval_episodes: 30
+  save_replay_buffer: False
+  autoencoder:
+    checkpoint_path: ../checkpoints/autoencoder/savi/push_red/latest.ckpt
+  actor:
+    num_layers: 4
+  critic:
+    num_layers: 4
+  reward_predictor:
+    num_layers: 4

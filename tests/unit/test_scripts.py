@@ -177,6 +177,26 @@ def test_evaluation_updates_the_last_action():
     assert not torch.isnan(seen[-1]).any(), "the SAVi encoder still receives the initial NaN action"
 
 
+# ------------------------------------------------------------------------------------ presets
+_PRESET_COMMON = ["model.autoencoder.checkpoint_path=../checkpoints/autoencoder/savi/push_red/latest.ckpt",
+                  "model.actor.num_layers=4", "model.critic.num_layers=4", "model.reward_predictor.num_layers=4",
+                  "model.max_steps=20000000", "model.eval_freq=10000", "model.num_eval_episodes=30",
+                  "model.save_replay_buffer=False"]
+
+
+@pytest.mark.parametrize("preset, overrides", [
+    ("push_red", ["experiment=push_red_4layers_savi8", "environment@model.env=push_red"]),
+    ("pick_red_frozen", ["experiment=pick_red_4layers_savi8_frozen", "environment@model.env=pick_red"]),
+    ("pick_red_finetune", ["experiment=pick_red_4layers_savi8_finetune", "environment@model.env=pick_red",
+                           "model.finetune_autoencoder=True", "model.autoencoder_learning_rate=0.00003"]),
+])
+def test_presets_equal_the_overrides_of_the_training_scripts(preset, overrides):
+    """configs/preset/ replaces the remote training scripts' command-line overrides."""
+    with initialize_config_dir(config_dir=str(CONFIGS_DIR), version_base=None):
+        assert compose("train_sold", overrides=[f"preset={preset}"]) == compose("train_sold",
+                                                                                overrides=overrides + _PRESET_COMMON)
+
+
 # ---------------------------------------------------------------------------------- all scripts
 @pytest.mark.parametrize("environment", ["reach_red", "push_red", "pick_red"])
 def test_training_and_evaluation_share_the_environment_configs(environment):
