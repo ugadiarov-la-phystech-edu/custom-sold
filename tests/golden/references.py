@@ -6,9 +6,20 @@ A refactor that renames modules, changes state-dict keys or alters the math make
 If an output change is intended, regenerate the references from the repository root and review the diff:
 
     PYTHONPATH=sold:. python -m tests.golden.references
+
+LEGACY_CHECKPOINT is a tiny SOLD checkpoint in the checkpoint format from before the refactoring (commit 4f6b757),
+with fine-tuning on (five optimizers). Lightning checkpoints pickle SOLDModule's constructor arguments and module paths,
+so it fails to load when a refactor changes either without a compatibility shim. It was generated once with
+
+    PYTHONPATH=sold:. python -m tests.golden.references --legacy-checkpoint
+
+Never regenerate it: a checkpoint written by newer code would no longer test old checkpoints. Its reference outputs
+are regenerated with the others.
 """
 
 from pathlib import Path
+import sys
+import tempfile
 
 import torch
 
@@ -17,6 +28,7 @@ REPO_DIR = Path(__file__).resolve().parents[2]
 SAVI_CHECKPOINTS = {"savi_push_red": "autoencoder/savi/push_red/latest.ckpt",
                     "savi_reach_red": "autoencoder/savi/reach_red/latest.ckpt"}
 SOLD_CHECKPOINT = "sold/reach_red/latest.ckpt"
+LEGACY_CHECKPOINT = DATA_DIR / "legacy_tiny_sold.ckpt"
 
 
 def _images(seed, batch=1, length=3, size=64):
@@ -36,25 +48,47 @@ def savi_outputs(checkpoint_path):
     return {"slots": slots, "reconstructions": decoded["reconstructions"], "masks": decoded["masks"]}
 
 
-def load_sold(checkpoint_path):
+def _sold_env(image_size, action_dim, max_episode_steps):
     from tests.fakes import make_fake_env
+    env = make_fake_env(image_size=image_size, max_episode_steps=max_episode_steps)
+    env.unwrapped.action_space = env.action_space = type(env.action_space)(-1.0, 1.0, (action_dim,),
+                                                                           env.action_space.dtype)
+    return env
+
+
+def load_sold(checkpoint_path, image_size=(64, 64), action_dim=4, max_episode_steps=50, **overrides):
+    """Load a SOLD checkpoint for a fake environment matching its image size and action space."""
     from train_sold import SOLDModule
-    env = make_fake_env(image_size=(64, 64), max_episode_steps=50)
-    env.unwrapped.action_space = env.action_space = type(env.action_space)(-1.0, 1.0, (4,), env.action_space.dtype)
-    return SOLDModule.load_from_checkpoint(str(checkpoint_path), env=env, map_location="cpu").eval()
+    env = _sold_env(image_size, action_dim, max_episode_steps)
+    return SOLDModule.load_from_checkpoint(str(checkpoint_path), env=env, map_location="cpu", **overrides)
+
+
+def load_legacy_sold(**overrides):
+    return load_sold(LEGACY_CHECKPOINT, image_size=(16, 16), action_dim=2, max_episode_steps=8, **overrides)
 
 
 @torch.no_grad()
-def sold_outputs(checkpoint_path):
-    sold = load_sold(checkpoint_path)
-    images = _images(1, length=5)
-    slots = sold.autoencoder.encode(images, torch.zeros(1, 4, 4))
-    actions = torch.linspace(-1, 1, 16).view(1, 4, 4)
-    return {"actor_mean": sold.actor(slots).mean,
-            "actor_stddev": sold.actor(slots).base_dist.stddev,
+def _sold_model_outputs(sold, images, num_context):
+    """Outputs of SOLD's actor, critic, reward predictor and dynamics model for fixed images."""
+    sold = sold.eval()
+    batch_size, sequence_length = images.shape[:2]
+    action_dim = sold.actor.lower_bound.numel()
+    slots = sold.autoencoder.encode(images, torch.zeros(batch_size, sequence_length - 1, action_dim))
+    actions = torch.linspace(-1, 1, (sequence_length - 1) * action_dim).view(1, sequence_length - 1, action_dim)
+    actor = sold.actor(slots)
+    return {"actor_mean": actor.mean,
+            "actor_stddev": actor.base_dist.stddev,
             "critic_mean": sold.critic(slots).mean,
             "reward_mean": sold.reward_predictor(slots).mean,
-            "predicted_slots": sold.dynamics_predictor.predict_slots(slots, actions, steps=2, num_context=3)}
+            "predicted_slots": sold.dynamics_predictor.predict_slots(slots, actions, steps=2, num_context=num_context)}
+
+
+def sold_outputs(checkpoint_path):
+    return _sold_model_outputs(load_sold(checkpoint_path), _images(1, length=5), num_context=3)
+
+
+def legacy_sold_outputs():
+    return _sold_model_outputs(load_legacy_sold(), _images(3, length=4, size=16), num_context=2)
 
 
 def tiny_sold_losses():
@@ -83,11 +117,26 @@ def tiny_sold_losses():
 def compute_all():
     references = {name: savi_outputs(REPO_DIR / "checkpoints" / path) for name, path in SAVI_CHECKPOINTS.items()}
     references["sold_reach_red"] = sold_outputs(REPO_DIR / "checkpoints" / SOLD_CHECKPOINT)
+    references["legacy_tiny_sold"] = legacy_sold_outputs()
     references["tiny_sold_losses"] = tiny_sold_losses()
     return references
 
 
+def generate_legacy_checkpoint():
+    """Train the tiny SOLD for a few steps with fine-tuning and save it (see the module docstring)."""
+    from tests.conftest import make_online_trainer, make_tiny_sold
+    torch.manual_seed(0)
+    sold = make_tiny_sold(finetune_autoencoder=True, max_steps=20)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        trainer = make_online_trainer(Path(tmp_dir))
+        trainer.fit(sold)
+        trainer.save_checkpoint(LEGACY_CHECKPOINT)
+    print(f"wrote {LEGACY_CHECKPOINT}")
+
+
 if __name__ == "__main__":
+    if "--legacy-checkpoint" in sys.argv:
+        generate_legacy_checkpoint()
     DATA_DIR.mkdir(exist_ok=True)
     for name, tensors in compute_all().items():
         torch.save(tensors, DATA_DIR / f"{name}.pt")

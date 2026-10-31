@@ -64,6 +64,7 @@ PACKAGES=(
     "pytest==8.4.2"                 # Test suite in tests/ (see tests/README.md)
     "pytest-cov==7.0.0"
     "pytest-timeout==2.4.0"
+    "ruff==0.14.2"                  # Linter (configured in pyproject.toml)
 )
 
 # Packages of the simulator stack that must not change.
