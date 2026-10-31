@@ -94,7 +94,7 @@ class EpisodeDataset(EpisodeDatasetInfoMixin, ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def sample(self) -> dict[str, torch.Tensor]:
+    def sample(self, generator: torch.Generator | None = None) -> dict[str, torch.Tensor]:
         """Sample a batch of sequences from the dataset.
 
         Returns:
@@ -150,7 +150,7 @@ class RingBufferDataset(EpisodeDataset):
         # Remove the oldest episode from the episode boundaries.
         self.episode_boundaries.popleft()
 
-    def sample(self) -> dict[str, torch.Tensor]:
+    def sample(self, generator: torch.Generator | None = None) -> dict[str, torch.Tensor]:
         # Get indices of viable episodes.
         if self.sequence_length is None:
             viable_episode_indices = torch.arange(self.num_episodes)
@@ -160,7 +160,9 @@ class RingBufferDataset(EpisodeDataset):
             )
 
         # Sample random episodes.
-        episode_indices = viable_episode_indices[torch.randint(len(viable_episode_indices), (self.batch_size,))]
+        episode_indices = viable_episode_indices[
+            torch.randint(len(viable_episode_indices), (self.batch_size,), generator=generator)
+        ]
 
         # Get tensor of episode boundaries.
         selected_boundaries = torch.tensor([self.episode_boundaries[i] for i in episode_indices])
@@ -169,7 +171,7 @@ class RingBufferDataset(EpisodeDataset):
         max_offsets = (
             torch.remainder(selected_boundaries[:, 1] - selected_boundaries[:, 0], self.capacity) - self.sequence_length
         )
-        offsets = ((max_offsets + 1) * torch.rand(self.batch_size)).long()  # Uniform over 0..max_offset inclusive.
+        offsets = ((max_offsets + 1) * torch.rand(self.batch_size, generator=generator)).long()  # 0..max_offset.
 
         # Sample start indices for each sequence.
         start_indices = selected_boundaries[:, 0] + offsets

@@ -12,12 +12,15 @@ class NumUpdatesWrapper(IterableDataset):
         self.measure_sampling = measure_sampling  # Add "sample_seconds" to each sample.
 
     def __iter__(self) -> Iterator:
+        # Seeded from the global RNG like a DataLoader worker, so that runs sample the same sequences as before the
+        # buffer was sampled in the main process (and old checkpoints resume with the same stream).
+        generator = torch.Generator().manual_seed(torch.empty((), dtype=torch.int64).random_().item())
         if self.dataset.is_empty:
             return iter([])
 
         for _ in range(self.num_updates):
             start_time = time.perf_counter()
-            sample = self.dataset.sample()
+            sample = self.dataset.sample(generator)
             if self.measure_sampling:
                 sample["sample_seconds"] = torch.tensor(time.perf_counter() - start_time, dtype=torch.float64)
             yield sample

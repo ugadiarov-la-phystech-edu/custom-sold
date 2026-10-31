@@ -20,7 +20,6 @@ import time
 import torch
 from torch.utils.data import DataLoader
 from typing import Any
-import warnings
 
 
 def set_seed(seed: int) -> None:
@@ -170,10 +169,10 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
                 save_path=self.logger.log_dir + "/replay_buffer",
             )
         dataset = NumUpdatesWrapper(self.replay_buffer, self.num_updates, measure_sampling=self.timings.enabled)
-        # The replay buffer is sampled in a single worker process on purpose.
-        warnings.filterwarnings("ignore", ".*Consider increasing the value of the `num_workers` argument*")
-        dataloader = DataLoader(dataset, batch_size=1, pin_memory=True, num_workers=1)
-        return dataloader
+        # No worker process: a fork per epoch costs more than the two samples, and a persistent worker would not see
+        # the episodes added after it was forked. The private generator keeps the loader's own seed draw off the global
+        # RNG, which NumUpdatesWrapper draws from instead (once per epoch, like the worker's seed before).
+        return DataLoader(dataset, batch_size=1, pin_memory=True, num_workers=0, generator=torch.Generator())
 
     @torch.no_grad()
     def on_train_epoch_start(self) -> None:
@@ -248,7 +247,7 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
         self.after_eval = True
 
     def on_before_batch_transfer(self, batch: Any, dataloader_idx: int) -> Any:
-        if "sample_seconds" in batch:  # From the DataLoader worker.
+        if "sample_seconds" in batch:
             for seconds in batch.pop("sample_seconds").tolist():
                 self.timings.add("replay_buffer/sample", seconds)
         return batch

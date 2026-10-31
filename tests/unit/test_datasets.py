@@ -207,6 +207,18 @@ def test_num_updates_wrapper(buffer):
     assert timed["sample_seconds"].dtype == torch.float64 and timed["sample_seconds"] >= 0
 
 
+def test_num_updates_wrapper_samples_from_one_seed_per_epoch(buffer):
+    add_episode(buffer, make_episode(4))
+    torch.manual_seed(1)
+    first = [batch["obs"] for batch in NumUpdatesWrapper(buffer, 2)]
+    torch.manual_seed(1)
+    torch.empty((), dtype=torch.int64).random_()  # The one draw of the global RNG per epoch, as a worker's seed.
+    state = torch.get_rng_state()
+    torch.manual_seed(1)
+    assert all(torch.equal(a, b) for a, b in zip(first, (batch["obs"] for batch in NumUpdatesWrapper(buffer, 2))))
+    assert torch.equal(torch.get_rng_state(), state)
+
+
 # BUGS_AND_PITFALLS.md #19 (fixed).
 def test_replay_buffer_can_sample_the_last_window(tmp_path):
     buffer = RingBufferDataset(capacity=10, batch_size=64, sequence_length=3, save_path=str(tmp_path))
