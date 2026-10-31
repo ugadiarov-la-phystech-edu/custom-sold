@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
-from collections import defaultdict
 from datasets.ring_buffer import RingBufferDataset
 from datasets.utils import NumUpdatesWrapper
+from utils.episode_runner import EpisodeRunner
 import gym
 import hydra
 from lightning import LightningModule, Trainer
@@ -111,6 +111,7 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
 
         self.last_action = torch.full_like(torch.from_numpy(self.env.action_space.sample().astype(np.float32)),
                                            float('nan')).to(self.device)
+        self.runner = EpisodeRunner(env, self._policy)
         self.num_steps = 0
         self.num_episodes = -1  # Start at -1 to account for the initial reset.
 
@@ -124,11 +125,15 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
     def select_action(self, obs: torch.Tensor, is_first: bool = False, mode: str = "train") -> torch.Tensor:
         pass
 
+    def _policy(self, obs: torch.Tensor, is_first: bool, mode: str) -> torch.Tensor:
+        # select_action reads last_action to encode the next observation.
+        self.last_action[:] = self.select_action(obs.to(self.device), is_first=is_first, mode=mode)
+        return self.last_action
+
     def on_fit_start(self) -> None:
         self.eval_next = False
         self.after_eval = False
-        self.obs = None
-        self.done = True
+        self.runner.done = True  # Start with a new episode.
 
     def train_dataloader(self) -> DataLoader:
         if not hasattr(self, "replay_buffer"):
@@ -151,7 +156,7 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
         if self.num_steps % self.eval_freq == 0:
             self.eval_next = True
 
-        if self.done:
+        if self.runner.done:
             self.num_episodes += 1
             if self.eval_next:
                 self.eval_loop()
@@ -160,16 +165,15 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
             self.log("train/buffer_size", self.replay_buffer.num_timesteps)
             if self.replay_buffer.last_episode_return is not None:
                 self.log("train/episode_return", self.replay_buffer.last_episode_return.item(), prog_bar=True)
-            self.obs = self.env.reset()
-            self.replay_buffer.add_step(self._complete_first_timestep({"obs": self.obs}))
+            obs = self.runner.reset()
+            self.replay_buffer.add_step(self._complete_first_timestep({"obs": obs}))
             self.log("train/num_episodes", self.num_episodes)
             self.log("train/num_steps", self.num_steps)
 
         # Select action, perform environment step, and store resulting experience.
         mode = "train" if self.num_steps >= self.num_seed else "random"
-        self.last_action[:] = self.select_action(self.obs.to(self.device), is_first=self.done, mode=mode)
-        self.obs, reward, self.done, info = self.env.step(self.last_action.cpu())
-        self.replay_buffer.add_step({"obs": self.obs, "action": self.last_action.cpu(), "reward": reward}, done=self.done)
+        obs, reward, done, info = self.runner.step(mode)
+        self.replay_buffer.add_step({"obs": obs, "action": self.last_action.cpu(), "reward": reward}, done=done)
         self.num_steps += 1
 
     def _complete_first_timestep(self, step_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -184,7 +188,7 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
     def eval_loop(self) -> None:
         episode_returns, successes = [], []
         for episode_index in range(self.num_eval_episodes):
-            episode = self.play_episode(mode="eval")
+            episode = self.runner.play_episode(mode="eval")
             self.log_video(f"eval/episode_{episode_index}", torch.stack(episode["obs"]))
             episode_returns.append(sum(episode["reward"]))
             if "success" in episode:
@@ -194,7 +198,7 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
             self.log("eval/success_rate", np.mean(successes))
 
         for episode_index in range(3):
-            episode = self.play_episode(mode="train")
+            episode = self.runner.play_episode(mode="train")
             self.log_video(f"train/episode_{episode_index}", torch.stack(episode["obs"]))
 
         # Save model checkpoint.
@@ -203,26 +207,6 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
 
         self.eval_next = False
         self.after_eval = True
-
-    @torch.no_grad()
-    def play_episode(self, mode: str = "eval") -> Dict[str, Any]:
-        """Run current policy for an episode to evaluate it without storing any experiences."""
-        if not self.done:
-            raise RuntimeError("Current training episode must have terminated before playing an episode.")
-
-        self.obs, self.done, info = self.env.reset(), False, {}
-        episode = defaultdict(list)
-        episode["obs"].append(self.obs)
-        while not self.done:
-            self.last_action[:] = self.select_action(self.obs.to(self.device), is_first=len(episode["obs"]) == 1,
-                                                  mode=mode)
-            self.obs, reward, self.done, info = self.env.step(self.last_action.cpu())
-            episode["obs"].append(self.obs.cpu())
-            episode["reward"].append(reward)
-
-        if "success" in info:
-            episode["success"] = info["success"]
-        return episode
 
     def on_train_batch_end(self, outputs: STEP_OUTPUT, batch: Any, batch_idx: int) -> None:
         self.after_eval = False  # Reset 'after_eval' to False after the first training batch.
@@ -258,7 +242,7 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
 
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         self.num_steps = checkpoint["num_steps"]
-        self.num_episodes = checkpoint["num_episodes"] - 1  # Will be incremented instantly since self.done is True.
+        self.num_episodes = checkpoint["num_episodes"] - 1  # Incremented at once, since self.runner.done is True.
 
         # The replay buffer is only needed to resume training. Without a trainer (e.g. load_from_checkpoint in
         # evaluate_sold.py) there is no logger directory to restore it into.

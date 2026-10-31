@@ -14,6 +14,7 @@ import torch
 from tests.conftest import add_episode, make_episode, make_online_trainer, make_tiny_sold
 from tests import fakes
 from utils import training
+from utils.episode_runner import EpisodeRunner
 from utils.training import OnlineProgressBar, print_summary, set_seed
 
 
@@ -69,31 +70,57 @@ def test_complete_first_timestep_adds_nan_action_and_reward(tiny_sold):
     assert tiny_sold._complete_first_timestep(dict(given))["reward"] == 1.0
 
 
-def test_play_episode_requires_finished_training_episode(tiny_sold):
-    tiny_sold.done = False
+def test_online_module_runner_updates_the_last_action(tiny_sold):
+    tiny_sold.runner.play_episode(mode="eval")
+    assert not torch.isnan(tiny_sold.last_action).any()  # select_action reads it to encode the next observation.
+
+
+# ----------------------------------------------------------------------------- episode runner
+def _runner(**env_kwargs):
+    env = fakes.make_fake_env(**env_kwargs)
+    calls = []
+
+    def policy(obs, is_first, mode):
+        calls.append((is_first, mode))
+        return torch.full((2,), 0.5)
+
+    return EpisodeRunner(env, policy), calls
+
+
+def test_episode_runner_steps_and_marks_the_first_step():
+    runner, calls = _runner()
+    assert runner.done and runner.obs is None
+    first = runner.reset()
+    assert torch.equal(first, runner.obs) and not runner.done
+    runner.step("random")
+    obs, reward, done, info = runner.step("train")
+    assert calls == [(True, "random"), (False, "train")]
+    assert torch.equal(obs, runner.obs) and not done
+    runner.reset()
+    assert runner.is_first
+
+
+def test_episode_runner_plays_whole_episodes_with_rendering():
+    runner, calls = _runner()
+    episode = runner.play_episode("eval", render=lambda env: torch.zeros(3, 4, 4))
+    assert len(episode["obs"]) == len(episode["rendered"]) == 9 and len(episode["reward"]) == 8
+    assert "success" in episode and runner.done
+    assert calls[0] == (True, "eval") and all(not is_first for is_first, _ in calls[1:])
+    assert "rendered" not in runner.play_episode("train")
+
+
+def test_episode_runner_requires_a_finished_episode():
+    runner, _ = _runner()
+    runner.reset()
     with pytest.raises(RuntimeError, match="must have terminated"):
-        tiny_sold.play_episode()
+        runner.play_episode()
 
 
-def test_play_episode_runs_one_episode_without_storing(tiny_sold):
-    tiny_sold.done = True
-    episode = tiny_sold.play_episode(mode="eval")
-    assert len(episode["obs"]) == 9 and len(episode["reward"]) == 8  # max_episode_steps=8
-    assert "success" in episode and tiny_sold.done
-    assert not torch.isnan(tiny_sold.last_action).any()
-
-
-def test_play_episode_without_success_info(tiny_sold, monkeypatch):
-    env = tiny_sold.env.unwrapped
-    original_step = env.step
-
-    def step_without_info(action):
-        obs, reward, done, _ = original_step(action)
-        return obs, reward, done, {}
-
-    monkeypatch.setattr(env, "step", step_without_info)
-    tiny_sold.done = True
-    assert "success" not in tiny_sold.play_episode(mode="train")
+def test_episode_runner_without_success_info(monkeypatch):
+    runner, _ = _runner()
+    original_step = runner.env.unwrapped.step
+    monkeypatch.setattr(runner.env.unwrapped, "step", lambda action: original_step(action)[:3] + ({},))
+    assert "success" not in runner.play_episode(mode="train")
 
 
 def test_on_train_epoch_end_stops_at_max_steps(tiny_sold):

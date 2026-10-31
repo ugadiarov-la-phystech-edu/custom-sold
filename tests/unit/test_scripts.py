@@ -154,24 +154,15 @@ def test_get_checkpoint_files(tmp_path, monkeypatch):
     assert evaluate_sold.get_checkpoint_files("a.ckpt") == [str(tmp_path / "a.ckpt")]
 
 
-def test_evaluate_play_episode_records_high_resolution_frames(monkeypatch):
-    sold = make_tiny_sold()
+def test_render_high_res(monkeypatch):
+    env = make_tiny_sold().env
     render_sizes = []
-    original_render = sold.env.unwrapped.render
-    monkeypatch.setattr(sold.env.unwrapped, "render",
+    original_render = env.unwrapped.render
+    monkeypatch.setattr(env.unwrapped, "render",
                         lambda mode="rgb_array", size=None: render_sizes.append(size) or original_render(mode, (64, 48)))
-    episode = evaluate_sold.play_episode(sold)
-    assert len(episode["obs"]) == len(episode["high_res"]) == 9 and len(episode["reward"]) == 8
-    assert render_sizes.count((1024, 1024)) == 9  # Observations themselves are rendered without a size.
-    assert episode["high_res"][0].shape == (3, 64, 48) and episode["high_res"][0].max() <= 1.0
-    assert "success" in episode
-
-
-def test_evaluate_play_episode_without_success(monkeypatch):
-    sold = make_tiny_sold()
-    original_step = sold.env.unwrapped.step
-    monkeypatch.setattr(sold.env.unwrapped, "step", lambda action: original_step(action)[:3] + ({},))
-    assert "success" not in evaluate_sold.play_episode(sold, mode="train")
+    frame = evaluate_sold.render_high_res(env)
+    assert render_sizes == [(1024, 1024)]
+    assert frame.shape == (3, 64, 48) and frame.dtype == torch.float32 and frame.max() <= 1.0
 
 
 # BUGS_AND_PITFALLS.md #7 (fixed).
@@ -181,7 +172,7 @@ def test_evaluation_updates_the_last_action():
     original = sold.autoencoder.encode
     sold.autoencoder.encode = lambda images, actions, prior_slots=None: (seen.append(actions.clone()),
                                                                           original(images, actions, prior_slots))[1]
-    evaluate_sold.play_episode(sold, mode="eval")
+    sold.runner.play_episode(mode="eval")  # As evaluate_sold.py plays its episodes.
     assert not torch.isnan(seen[-1]).any(), "the SAVi encoder still receives the initial NaN action"
 
 

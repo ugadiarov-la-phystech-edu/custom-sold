@@ -1,4 +1,4 @@
-from collections import defaultdict
+import gym
 import hydra
 import json
 from omegaconf import DictConfig
@@ -8,26 +8,13 @@ import torch
 from torchvision.io import write_video
 from torchvision import transforms
 from train_sold import SOLDModule
-from typing import Any, Dict, List
+from typing import List
 from utils.training import set_seed
 
 
-@torch.no_grad()
-def play_episode(sold: SOLDModule, mode: str = "eval") -> Dict[str, Any]:
-    obs, done, info = sold.env.reset(), False, {}
-    episode = defaultdict(list)
-    episode["obs"].append(obs)
-    episode["high_res"].append(transforms.ToTensor()(sold.env.render(size=(1024, 1024)).copy()))
-    while not done:
-        sold.last_action[:] = sold.select_action(obs.to(sold.device), is_first=len(episode["obs"]) == 1, mode=mode)
-        obs, reward, done, info = sold.env.step(sold.last_action.cpu())
-        episode["obs"].append(obs.cpu())
-        episode["high_res"].append(transforms.ToTensor()(sold.env.render(size=(1024, 1024)).copy()))
-        episode["reward"].append(reward)
-
-    if "success" in info:
-        episode["success"] = info["success"]
-    return episode
+def render_high_res(env: gym.Env) -> torch.Tensor:
+    """The current frame as a float tensor of shape (3, 1024, 1024) in [0, 1]."""
+    return transforms.ToTensor()(env.render(size=(1024, 1024)).copy())
 
 
 def get_checkpoint_files(checkpoint_path: str) -> List[str]:
@@ -61,11 +48,11 @@ def evaluate(cfg: DictConfig):
             checkpoint_filename = os.path.splitext(os.path.basename(checkpoint))[0]
             checkpoint_videos_dir = os.path.join(videos_dir, checkpoint_filename)
             os.makedirs(checkpoint_videos_dir, exist_ok=True)
-            episode = play_episode(sold, mode="eval")
+            episode = sold.runner.play_episode(mode="eval", render=render_high_res)
             write_video(os.path.join(checkpoint_videos_dir, f"episode_obs_{episode_index}.mp4"),
                         (torch.stack(episode["obs"]).permute(0, 2, 3, 1)), fps=10)
             write_video(os.path.join(checkpoint_videos_dir, f"episode_high_res_{episode_index}.mp4"),
-                        (torch.stack(episode["high_res"]).permute(0, 2, 3, 1) * 255).to(torch.uint8), fps=10)
+                        (torch.stack(episode["rendered"]).permute(0, 2, 3, 1) * 255).to(torch.uint8), fps=10)
             episode_returns.append(sum(episode["reward"]))
             if "success" in episode:
                 successes.append(episode["success"])
