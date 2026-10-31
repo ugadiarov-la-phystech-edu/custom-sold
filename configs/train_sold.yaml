@@ -11,6 +11,7 @@ defaults:
 checkpoint: ""
 experiment: "my_experiment"
 seed: 42
+float32_matmul_precision: high  # TF32 matmuls on GPUs; "highest" for full float32.
 
 model:
   _target_: sold.train_sold.SOLDModule

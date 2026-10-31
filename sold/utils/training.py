@@ -207,7 +207,7 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
         mode = "train" if self.num_steps >= self.num_seed else "random"
         obs, reward, done, info = self.runner.step(mode)
         with self.timings.measure("replay_buffer/add_step"):
-            self.replay_buffer.add_step({"obs": obs, "action": self.last_action.cpu(), "reward": reward}, done=done)
+            self.replay_buffer.add_step({"obs": obs, "action": self.runner.action, "reward": reward}, done=done)
         self.num_steps += 1
 
     def _complete_first_timestep(self, step_data: dict[str, Any]) -> dict[str, Any]:
@@ -283,6 +283,10 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
         now = time.perf_counter()
         self.log("timing/env_steps_per_second", (self.num_steps - last_num_steps) / (now - last_time))
         self.last_timings_log = (now, self.num_steps)
+        if self.device.type == "cuda":  # Peaks since the last call.
+            self.log("memory/gpu_peak_allocated_gb", torch.cuda.max_memory_allocated(self.device) / 2**30)
+            self.log("memory/gpu_peak_reserved_gb", torch.cuda.max_memory_reserved(self.device) / 2**30)
+            torch.cuda.reset_peak_memory_stats(self.device)
 
     @property
     def logging_step(self) -> int:

@@ -18,6 +18,7 @@ class EpisodeRunner:
         self.policy = policy
         self.timings = timings or Timings(enabled=False)
         self.obs: torch.Tensor | None = None
+        self.action: torch.Tensor | None = None  # The last action taken, on the CPU.
         self.done = True  # No episode in progress.
         self.is_first = True  # The next step is the first of its episode.
 
@@ -31,9 +32,9 @@ class EpisodeRunner:
     def step(self, mode: str, phase: str = "collect") -> tuple[torch.Tensor, float, bool, dict[str, Any]]:
         """Take an action chosen in mode ("train", "eval" or "random"); return obs, reward, done, info."""
         with self.timings.measure(f"{phase}/action_selection"):
-            action = self.policy(self.obs, is_first=self.is_first, mode=mode).cpu()
+            self.action = self.policy(self.obs, is_first=self.is_first, mode=mode).cpu()
         with self.timings.measure(f"{phase}/env_step"):
-            self.obs, reward, self.done, info = self.env.step(action)
+            self.obs, reward, self.done, info = self.env.step(self.action)
         self.is_first = False
         return self.obs, reward, self.done, info
 

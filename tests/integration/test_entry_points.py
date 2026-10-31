@@ -23,10 +23,13 @@ def run_entry_point(monkeypatch, main, overrides):
     monkeypatch.setattr(sys, "argv", [main.__module__ + ".py", *overrides])
     # Hydra resolves config_path="../configs" relative to the script file only when it runs as __main__.
     monkeypatch.setattr(main.__wrapped__, "__module__", "__main__")
+    precision = torch.get_float32_matmul_precision()
     try:
         main()
+        torch.get_float32_matmul_precision()  # Lightning calls it on GPUs; it raises if the TF32 APIs are mixed.
     finally:
         GlobalHydra.instance().clear()
+        torch.set_float32_matmul_precision(precision)  # train_sold sets it for the whole process.
 
 
 def sold_overrides(run_dir, savi_checkpoint, **values):
@@ -174,12 +177,15 @@ def test_train_sold_writes_checkpoints_and_metrics(sold_run):
 
 def test_train_sold_with_wandb(monkeypatch, tmp_path, savi_checkpoint):
     fake_wandb = fakes.install_fake_wandb(monkeypatch)
+    precisions = []
+    monkeypatch.setattr(torch, "set_float32_matmul_precision", precisions.append)
     run_entry_point(
         monkeypatch,
         train_sold.train,
         sold_overrides(tmp_path, savi_checkpoint, **{"logger.log_to_wandb": True, "model.max_steps": 10}),
     )
     assert [call[0] for call in fake_wandb.calls] == ["init", "finish"]
+    assert precisions[0] == "high"  # TF32 matmuls.
 
 
 def _checkpoint_without_replay_buffer(sold_run, tmp_path):

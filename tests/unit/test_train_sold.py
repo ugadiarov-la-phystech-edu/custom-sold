@@ -11,6 +11,7 @@ from sold.train_sold import OptimizerSettings, SOLDModule, optimization_settings
 from tests import fakes
 from tests.conftest import make_online_trainer, make_tiny_sold, tiny_sold_kwargs
 import torch
+import torch.nn.functional as F
 
 
 class LogRecorder:
@@ -162,6 +163,12 @@ def test_compute_reward_loss_ignores_first_step(tiny_sold):
     losses = tiny_sold.compute_reward_loss(images, outputs["reconstructions"], outputs["slots"], rewards)
     assert torch.isfinite(losses["reward_loss"]) and losses["reward_mse_loss"].dim() == 0
     assert not losses["reward_mse_loss"].requires_grad
+    # The masked means equal the means over the steps after the first.
+    valid = ~torch.isnan(rewards)
+    log_probs = tiny_sold.reward_predictor(outputs["slots"]).log_prob(torch.nan_to_num(rewards).unsqueeze(2))
+    assert torch.allclose(losses["reward_loss"], -log_probs.reshape(valid.shape)[valid].mean())
+    expected_mse = F.mse_loss(losses["predicted_rewards"][valid], rewards[valid])
+    assert torch.allclose(losses["reward_mse_loss"], expected_mse)
 
 
 @pytest.mark.parametrize("from_every", [False, True])

@@ -106,6 +106,7 @@ def test_episode_runner_steps_and_marks_the_first_step():
     assert torch.equal(first, runner.obs) and not runner.done
     runner.step("random")
     obs, reward, done, info = runner.step("train")
+    assert torch.equal(runner.action, torch.full((2,), 0.5))
     assert calls == [(True, "random"), (False, "train")]
     assert torch.equal(obs, runner.obs) and not done
     runner.reset()
@@ -152,6 +153,20 @@ def test_on_train_epoch_end_waits_for_the_gpu(tiny_sold, monkeypatch):
     tiny_sold._device = torch.device("cuda")
     tiny_sold.on_train_epoch_end()
     assert [device.type for device in synchronized] == ["cuda"] and "learn/gpu_drain" in tiny_sold.timings.summary()
+
+
+def test_log_timings_adds_peak_gpu_memory(tiny_sold, monkeypatch):
+    logged, reset = {}, []
+    monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda device: 2**30)
+    monkeypatch.setattr(torch.cuda, "max_memory_reserved", lambda device: 2**31)
+    monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", reset.append)
+    monkeypatch.setattr(tiny_sold, "log", lambda name, value: logged.update({name: value}))
+    tiny_sold.trainer = SimpleNamespace(is_last_batch=True)
+    tiny_sold.last_timings_log = (0.0, 0)
+    tiny_sold._device = torch.device("cuda")
+    tiny_sold.log_timings()
+    assert logged["memory/gpu_peak_allocated_gb"] == 1.0 and logged["memory/gpu_peak_reserved_gb"] == 2.0
+    assert len(reset) == 1 and "timing/env_steps_per_second" in logged
 
 
 def test_sample_durations_are_read_before_the_batch_transfer(tiny_sold):

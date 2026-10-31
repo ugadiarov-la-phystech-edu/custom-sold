@@ -311,14 +311,17 @@ class SOLDModule(OnlineModule):
         is_firsts = torch.isnan(rewards)  # We add NaN as a reward on the first time-step.
         predicted_rewards_dist = self.reward_predictor(slots.detach())
         log_probs = predicted_rewards_dist.log_prob(torch.nan_to_num(rewards).unsqueeze(2))
-        masked_log_probs = log_probs[~is_firsts]
+        # Masked means: boolean indexing syncs with the GPU.
+        valid = (~is_firsts).to(log_probs.dtype)
+        num_valid = valid.sum()
 
         predicted_rewards = predicted_rewards_dist.mean.squeeze(2).detach()
+        squared_errors = (predicted_rewards - torch.nan_to_num(rewards)) ** 2
         # A metric: detached, converted to a number only when logged (no GPU sync).
         return {
-            "reward_loss": -masked_log_probs.mean(),
+            "reward_loss": -(log_probs.reshape(valid.shape) * valid).sum() / num_valid,
             "predicted_rewards": predicted_rewards,
-            "reward_mse_loss": F.mse_loss(predicted_rewards[~is_firsts], rewards[~is_firsts]),
+            "reward_mse_loss": (squared_errors * valid).sum() / num_valid,
         }
 
     def imagine_ahead(self, slots: torch.Tensor, actions: torch.Tensor) -> Imagination:
@@ -450,6 +453,7 @@ def train(cfg: DictConfig):
         wandb.init(project="sold", name=cfg.experiment, config=dict(cfg), sync_tensorboard=True)
     print_summary(cfg)
     set_seed(cfg.seed)
+    torch.set_float32_matmul_precision(cfg.float32_matmul_precision)  # Lightning reads this (legacy) API on GPUs.
     sold = hydra.utils.instantiate(cfg.model)
     trainer = instantiate_trainer(cfg)
     trainer.fit(sold, ckpt_path=os.path.abspath(cfg.checkpoint) if cfg.checkpoint else None)
