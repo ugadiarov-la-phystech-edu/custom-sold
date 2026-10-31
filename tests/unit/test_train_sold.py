@@ -116,13 +116,17 @@ def test_compute_actor_loss_rejects_unknown_gradients(tiny_sold):
         tiny_sold.compute_actor_loss(torch.randn(2, 3), torch.randn(2, 3), torch.randn(2, 3), torch.rand(2, 3))
 
 
-def test_compute_critic_loss(tiny_sold):
+@pytest.mark.parametrize("overrides, weight", [({}, 0.1), ({"critic_regularization_weight": 0.5}, 0.5)])
+def test_compute_critic_loss(overrides, weight):
+    sold = make_tiny_sold(**overrides)  # The value hard-coded before it was configurable.
     logits = torch.randn(2, 3, 255, requires_grad=True)
     dist = TwoHotEncodingDistribution(logits, dims=1)
     returns, targets = torch.randn(2, 3), torch.randn(2, 3)
-    losses = tiny_sold.compute_critic_loss(dist, returns, targets)
-    expected_return = torch.mean(tiny_sold.discounts * -dist.log_prob(returns.unsqueeze(2)))
+    losses = sold.compute_critic_loss(dist, returns, targets)
+    expected_return = torch.mean(sold.discounts * -dist.log_prob(returns.unsqueeze(2)))
+    expected_regularization = torch.mean(sold.discounts * -dist.log_prob(targets.unsqueeze(2)))
     assert torch.allclose(losses["critic_return_loss"], expected_return)
+    assert torch.allclose(losses["critic_target_regularization_loss"], weight * expected_regularization)
     assert torch.allclose(losses["critic_loss"], losses["critic_return_loss"] + losses["critic_target_regularization_loss"])
     assert isinstance(losses["return_mse_loss"], float)
 

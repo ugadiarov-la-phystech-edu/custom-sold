@@ -5,6 +5,7 @@ from .slot_aggregation_transformer import SlotAggregationTransformer
 import torch
 import torch.distributions as D
 import torch.nn as nn
+from typing import Callable
 
 
 class RMSNorm(nn.Module):
@@ -24,14 +25,18 @@ class RMSNorm(nn.Module):
 class Predictor(nn.Module):
     def __init__(self, max_episode_steps: int, num_slots: int, slot_dim: int, token_dim: int, num_heads: int,
                  num_layers: int, hidden_dim: int, output_dim: int, num_register_tokens: int = 0,
-                 num_mlp_layers: int = 1) -> None:
-        """Used to predict single quantities like rewards or actions from the set and history of slots."""
+                 num_mlp_layers: int = 1, attention_mask: Callable = AlibiMask,
+                 positional_encoding: Callable = NoPositionalEncoding) -> None:
+        """Used to predict single quantities like rewards or actions from the set and history of slots.
+
+        attention_mask and positional_encoding are factories (e.g. classes in modeling.attention_mask and
+        modeling.positional_encoding) for the slot aggregation transformer.
+        """
         super().__init__()
-        attention_mask = AlibiMask(max_episode_steps, num_heads, num_slots, num_register_tokens)
-        positional_encoding = NoPositionalEncoding(max_episode_steps, token_dim)
         self.slot_aggregation_transformer = SlotAggregationTransformer(
-            attention_mask, positional_encoding, max_episode_steps, num_slots, slot_dim, token_dim, num_heads,
-            num_layers, hidden_dim, num_register_tokens)
+            attention_mask(max_episode_steps, num_heads, num_slots, num_register_tokens),
+            positional_encoding(max_episode_steps, token_dim), max_episode_steps, num_slots, slot_dim, token_dim,
+            num_heads, num_layers, hidden_dim, num_register_tokens)
 
         self.mlp = []
         for layer_num in range(num_mlp_layers):
@@ -51,10 +56,11 @@ class Predictor(nn.Module):
 
 class ScalarPredictor(Predictor):
     def __init__(self, max_episode_steps: int, num_slots: int, slot_dim: int, token_dim: int, num_heads: int,
-                 num_layers: int, hidden_dim: int, num_register_tokens: int = 0, num_mlp_layers: int = 1) -> None:
+                 num_layers: int, hidden_dim: int, num_register_tokens: int = 0, num_mlp_layers: int = 1,
+                 **kwargs) -> None:
         """Predict scalar outputs like values and rewards directly"""
         super().__init__(max_episode_steps, num_slots, slot_dim, token_dim, num_heads, num_layers, hidden_dim,
-                         output_dim=1, num_register_tokens=num_register_tokens, num_mlp_layers=num_mlp_layers)
+                         output_dim=1, num_register_tokens=num_register_tokens, num_mlp_layers=num_mlp_layers, **kwargs)
 
     def forward(self, slots: torch.Tensor, start: int = 0) -> D.Distribution:
         loc = super().forward(slots, start=start)
@@ -64,10 +70,12 @@ class ScalarPredictor(Predictor):
 class GaussianPredictor(Predictor):
     def __init__(self, max_episode_steps: int, num_slots: int, slot_dim: int, token_dim: int, num_heads: int,
                  num_layers: int, hidden_dim: int, output_dim: int, num_register_tokens: int = 0, num_mlp_layers: int = 1,
-                 lower_bound = None, upper_bound = None) -> None:
+                 lower_bound = None, upper_bound = None, min_std: float = 0.1, max_std: float = 1.0,
+                 init_std: float = 2.0, **kwargs) -> None:
         super().__init__(max_episode_steps, num_slots, slot_dim, token_dim, num_heads, num_layers, hidden_dim,
-                         output_dim=2*output_dim, num_register_tokens=num_register_tokens, num_mlp_layers=num_mlp_layers)
-        self.max_std, self.min_std, self.init_std = 1.0, 0.1, 2.0
+                         output_dim=2*output_dim, num_register_tokens=num_register_tokens, num_mlp_layers=num_mlp_layers,
+                         **kwargs)
+        self.max_std, self.min_std, self.init_std = max_std, min_std, init_std
         # Non-persistent buffers follow the module's device without changing the checkpoint keys.
         self.register_buffer("lower_bound", torch.as_tensor(lower_bound, dtype=torch.float32), persistent=False)
         self.register_buffer("upper_bound", torch.as_tensor(upper_bound, dtype=torch.float32), persistent=False)
@@ -83,10 +91,12 @@ class GaussianPredictor(Predictor):
 
 class TwoHotPredictor(Predictor):
     def __init__(self, max_episode_steps: int, num_slots: int, slot_dim: int, token_dim: int, num_heads: int,
-                 num_layers: int, hidden_dim: int, num_register_tokens: int = 0, num_mlp_layers: int = 1) -> None:
-        """Predict over 255 exponentially-spaced bins to represent scalar values like rewards."""
+                 num_layers: int, hidden_dim: int, num_register_tokens: int = 0, num_mlp_layers: int = 1,
+                 num_bins: int = 255, **kwargs) -> None:
+        """Predict over num_bins exponentially-spaced bins to represent scalar values like rewards."""
         super().__init__(max_episode_steps, num_slots, slot_dim, token_dim, num_heads, num_layers, hidden_dim,
-                         output_dim=255, num_register_tokens=num_register_tokens, num_mlp_layers=num_mlp_layers)
+                         output_dim=num_bins, num_register_tokens=num_register_tokens, num_mlp_layers=num_mlp_layers,
+                         **kwargs)
 
     def forward(self, slots: torch.Tensor, start: int = 0) -> TwoHotEncodingDistribution:
         logits = super().forward(slots, start=start)

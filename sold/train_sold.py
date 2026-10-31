@@ -29,7 +29,7 @@ class SOLDModule(OnlineModule):
                  actor_entropy_loss_weight: float, actor_gradients: str, return_lambda: float, discount_factor: float,
                  critic_ema_decay: float, env: gym.Env, max_steps: int, num_seed: int, update_freq: int,
                  num_updates: int, eval_freq: int, num_eval_episodes: int, batch_size: int, buffer_capacity: int,
-                 save_replay_buffer: bool) -> None:
+                 save_replay_buffer: bool, critic_regularization_weight: float = 0.1) -> None:
 
         self.min_num_context, self.max_num_context = (num_context, num_context) if isinstance(num_context, int) else num_context
         if self.min_num_context > self.max_num_context:
@@ -72,6 +72,7 @@ class SOLDModule(OnlineModule):
         self.return_lambda = return_lambda
         self.discount_factor = discount_factor
         self.critic_ema_decay = critic_ema_decay
+        self.critic_regularization_weight = critic_regularization_weight
 
         self.return_moments = Moments()
         self.register_buffer("discounts", torch.full((1, self.imagination_horizon), self.discount_factor))
@@ -293,12 +294,12 @@ class SOLDModule(OnlineModule):
                 "actor_entropy_loss": self.actor_entropy_loss_weight * actor_entropy_loss}
 
     def compute_critic_loss(self, predicted_values_dist: D.Distribution, lambda_returns: torch.Tensor,
-                            predicted_values_targ: torch.Tensor, regularization_loss_weight: float = 0.1) -> Dict[str, Any]:
+                            predicted_values_targ: torch.Tensor) -> Dict[str, Any]:
         return_loss = torch.mean(self.discounts.detach() * (-predicted_values_dist.log_prob(lambda_returns.detach().unsqueeze(2))))
         target_regularization_loss = torch.mean(self.discounts.detach() * (-predicted_values_dist.log_prob(predicted_values_targ.detach().unsqueeze(2))))
-        return {"critic_loss": return_loss + regularization_loss_weight * target_regularization_loss,
+        return {"critic_loss": return_loss + self.critic_regularization_weight * target_regularization_loss,
                 "critic_return_loss": return_loss,
-                "critic_target_regularization_loss": regularization_loss_weight * target_regularization_loss,
+                "critic_target_regularization_loss": self.critic_regularization_weight * target_regularization_loss,
                 "return_mse_loss": F.mse_loss(predicted_values_dist.mean.squeeze(2), lambda_returns).item()}
 
     def compute_lambda_returns(self, rewards, values):

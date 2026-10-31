@@ -45,6 +45,7 @@ model:
   return_lambda: 0.95  # Lambda used to compute bootstrapped λ-returns.
   discount_factor: 0.96  # Discount factor used to compute returns.
   critic_ema_decay: 0.98  # Exponential moving average decay for the critic target network.
+  critic_regularization_weight: 0.1  # Weight of the critic's regularization towards the target critic.
 
   env:
     _target_: envs.make_env
@@ -77,6 +78,9 @@ model:
     num_layers: 3
     hidden_dim: 512
     num_mlp_layers: 1
+    min_std: 0.1  # Bounds of the action std.
+    max_std: 1.0
+    init_std: 2.0  # Offset of the std's sigmoid (larger starts closer to max_std).
 
   critic:
     _target_: modeling.sold.prediction.TwoHotPredictor
@@ -86,6 +90,7 @@ model:
     num_layers: 3
     hidden_dim: 512
     num_mlp_layers: 1
+    num_bins: 255  # Exponentially spaced two-hot bins.
 
   reward_predictor:
     _target_: modeling.sold.prediction.TwoHotPredictor
@@ -95,3 +100,4 @@ model:
     num_layers: 3
     hidden_dim: 512
     num_mlp_layers: 1
+    num_bins: 255  # Exponentially spaced two-hot bins.

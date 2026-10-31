@@ -4,9 +4,9 @@ import pytest
 import torch
 import torch.distributions as D
 
-from modeling.attention_mask import AlibiMask
+from modeling.attention_mask import AlibiMask, CausalMask
 from modeling.distributions import TwoHotEncodingDistribution
-from modeling.positional_encoding import NoPositionalEncoding
+from modeling.positional_encoding import LearnedEncoding, NoPositionalEncoding
 from modeling.sold.dynamics import AutoregressiveWrapper, OCVPSeqDynamicsModel, OCVPSeqLayer, make_ocvp_seq_dynamics_model
 from modeling.sold.prediction import GaussianPredictor, Predictor, RMSNorm, ScalarPredictor, TwoHotPredictor
 from modeling.sold.slot_aggregation_transformer import SlotAggregationTransformer, TransformerEncoderLayer
@@ -149,6 +149,19 @@ def test_predictor_mlp_depth(num_mlp_layers):
     assert model(torch.randn(2, 4, 2, 4), start=1).shape == (2, 3, 3)
 
 
+def test_predictor_defaults_to_alibi_mask_without_positional_encoding():
+    transformer = Predictor(**PREDICTOR_ARGS, output_dim=3).slot_aggregation_transformer
+    assert type(transformer.attention_mask) is AlibiMask
+    assert type(transformer.positional_encoding) is NoPositionalEncoding
+
+
+def test_predictor_accepts_other_mask_and_positional_encoding():
+    model = ScalarPredictor(**PREDICTOR_ARGS, attention_mask=CausalMask, positional_encoding=LearnedEncoding)
+    transformer = model.slot_aggregation_transformer
+    assert type(transformer.attention_mask) is CausalMask and type(transformer.positional_encoding) is LearnedEncoding
+    assert model(torch.randn(2, 3, 2, 4)).mean.shape == (2, 3, 1)
+
+
 def test_scalar_predictor_returns_unit_variance_normal():
     dist = ScalarPredictor(**PREDICTOR_ARGS)(torch.randn(2, 3, 2, 4))
     assert isinstance(dist, D.Normal)
@@ -168,6 +181,15 @@ def test_gaussian_predictor_bounds_and_std():
     assert dist.rsample().shape == (2, 3, 2)
 
 
+def test_gaussian_predictor_std_bounds_are_configurable():
+    model = GaussianPredictor(**PREDICTOR_ARGS, output_dim=2, lower_bound=[-1.0, -1.0], upper_bound=[1.0, 1.0],
+                              min_std=0.2, max_std=0.5)
+    for bias, expected in [(100.0, 0.5), (-100.0, 0.2)]:
+        with torch.no_grad():
+            model.mlp[-1].bias.fill_(bias)
+        assert torch.allclose(model(torch.randn(1, 2, 2, 4)).base_dist.stddev, torch.tensor(expected))
+
+
 def test_gaussian_predictor_bounds_are_device_buffers_outside_the_checkpoint():
     model = GaussianPredictor(**PREDICTOR_ARGS, output_dim=2, lower_bound=[-1.0, -1.0], upper_bound=[1.0, 1.0])
     assert dict(model.named_buffers())["lower_bound"].dtype == torch.float32
@@ -181,6 +203,7 @@ def test_two_hot_predictor():
     assert isinstance(dist, TwoHotEncodingDistribution)
     assert dist.logits.shape == (2, 1, 255)
     assert dist.mean.shape == (2, 1, 1)
+    assert TwoHotPredictor(**PREDICTOR_ARGS, num_bins=41)(torch.randn(2, 3, 2, 4)).logits.shape == (2, 3, 41)
 
 
 @pytest.mark.xfail(strict=True, reason="BUGS_AND_PITFALLS.md #28: the actor's mean can never exceed about 0.76")
