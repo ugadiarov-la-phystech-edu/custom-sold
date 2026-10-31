@@ -92,6 +92,7 @@ class SOLDModule(OnlineModule):
         buffer_capacity: int,
         save_replay_buffer: bool,
         critic_regularization_weight: float = 0.1,
+        profile: bool = True,
         optimization: Mapping[str, Mapping[str, float]] | None = None,  # Or flat legacy_hparams (old checkpoints).
         **legacy_hparams: Any,
     ) -> None:
@@ -116,6 +117,7 @@ class SOLDModule(OnlineModule):
             sequence_length,
             buffer_capacity,
             save_replay_buffer,
+            profile,
         )
         self.automatic_optimization = False
         self.save_hyperparameters(logger=False, ignore=["env"])
@@ -183,7 +185,7 @@ class SOLDModule(OnlineModule):
         )
 
         # Without fine-tuning, the autoencoder forward pass needs no autograd graph.
-        with torch.set_grad_enabled(self.finetune_autoencoder):
+        with self.measure_gpu("learn/autoencoder"), torch.set_grad_enabled(self.finetune_autoencoder):
             reconstruction = reconstruction_loss(self.autoencoder, images, actions)
         if self.finetune_autoencoder:
             self._optimize("autoencoder", autoencoder_optimizers[0], reconstruction["reconstruction_loss"])
@@ -193,42 +195,50 @@ class SOLDModule(OnlineModule):
         outputs = dict(reconstruction)
 
         # Learn to predict dynamics in slot-space.
-        outputs |= self.compute_dynamics_loss(images, slots, actions)
+        with self.measure_gpu("learn/dynamics_loss"):
+            outputs |= self.compute_dynamics_loss(images, slots, actions)
         self._optimize("dynamics", dynamics_optimizer, outputs["dynamics_loss"])
 
         # Learn to predict rewards from the slot representation.
-        outputs |= self.compute_reward_loss(images, outputs["reconstructions"], slots, rewards)
+        with self.measure_gpu("learn/reward_loss"):
+            outputs |= self.compute_reward_loss(images, outputs["reconstructions"], slots, rewards)
         self._optimize("reward", reward_optimizer, outputs["reward_loss"])
 
         # Update the target critic network.
-        rl.returns.ema_update(self.critic_target, self.critic, self.critic_ema_decay)
+        with self.measure_gpu("learn/critic_target"):
+            rl.returns.ema_update(self.critic_target, self.critic, self.critic_ema_decay)
 
         # Perform latent imagination to train the actor and critic.
-        imagination = self.imagine_ahead(slots, actions)
+        with self.measure_gpu("learn/imagination"):
+            imagination = self.imagine_ahead(slots, actions)
 
         # Learn the actor.
-        outputs |= self.compute_actor_loss(
-            imagination.lambda_returns,
-            imagination.predicted_values_targ,
-            imagination.action_log_probs,
-            imagination.action_entropies,
-        )
+        with self.measure_gpu("learn/actor_loss"):
+            outputs |= self.compute_actor_loss(
+                imagination.lambda_returns,
+                imagination.predicted_values_targ,
+                imagination.action_log_probs,
+                imagination.action_entropies,
+            )
         self._optimize("actor", actor_optimizer, outputs["actor_loss"])
 
         # Learn the critic.
-        outputs |= self.compute_critic_loss(
-            imagination.predicted_values_dist, imagination.lambda_returns, imagination.predicted_values_targ
-        )
+        with self.measure_gpu("learn/critic_loss"):
+            outputs |= self.compute_critic_loss(
+                imagination.predicted_values_dist, imagination.lambda_returns, imagination.predicted_values_targ
+            )
         self._optimize("critic", critic_optimizer, outputs["critic_loss"])
 
         if self.after_eval:
-            self.log_visualizations(rewards, reconstruction, outputs, imagination)
+            with self.measure_gpu("learn/visualization"):
+                self.log_visualizations(rewards, reconstruction, outputs, imagination)
 
         # Log all losses.
-        for key, value in outputs.items():
-            if key.endswith("_loss"):
-                self.log("train/" + key, value)
-        self.log_gradients(model_names=("reward_predictor", "actor", "critic"))
+        with self.measure_gpu("learn/logging"):
+            for key, value in outputs.items():
+                if key.endswith("_loss"):
+                    self.log("train/" + key, value)
+            self.log_gradients(model_names=("reward_predictor", "actor", "critic"))
         return outputs
 
     @torch.no_grad()
@@ -264,11 +274,12 @@ class SOLDModule(OnlineModule):
 
     def _optimize(self, model_name: str, optimizer, loss: torch.Tensor) -> None:
         """One gradient step on loss, clipping the gradient norm to the model's grad_clip."""
-        optimizer.zero_grad()
-        self.manual_backward(loss)
-        grad_clip = self.optimizer_settings[model_name].grad_clip
-        self.clip_gradients(optimizer, gradient_clip_val=grad_clip, gradient_clip_algorithm="norm")
-        optimizer.step()
+        with self.measure_gpu(f"learn/{model_name}_update"):
+            optimizer.zero_grad()
+            self.manual_backward(loss)
+            grad_clip = self.optimizer_settings[model_name].grad_clip
+            self.clip_gradients(optimizer, gradient_clip_val=grad_clip, gradient_clip_algorithm="norm")
+            optimizer.step()
 
     def compute_dynamics_loss(self, images: torch.Tensor, slots: torch.Tensor, actions: torch.Tensor) -> dict[str, Any]:
         self.dynamics_predictor.train()

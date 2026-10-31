@@ -14,7 +14,9 @@ from sold.data.ring_buffer import RingBufferDataset
 from sold.data.utils import NumUpdatesWrapper
 from sold.utils.episode_runner import EpisodeRunner
 from sold.utils.logging import LoggingStepMixin
+from sold.utils.profiling import Timings
 from termcolor import colored
+import time
 import torch
 from torch.utils.data import DataLoader
 from typing import Any
@@ -95,6 +97,7 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
         sequence_length: int,
         buffer_capacity: int,
         save_replay_buffer: bool,
+        profile: bool = True,
     ) -> None:
         """Integrates online experience collection with PyTorch Lightning's training loop.
 
@@ -109,6 +112,8 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
             batch_size (int): Batch size of experience sampled from the replay buffer.
             sequence_length (int): Length of sequences sampled from the replay buffer.
             buffer_capacity (int): Maximum number of steps to store in the replay buffer.
+            save_replay_buffer (bool): Save the replay buffer with each checkpoint.
+            profile (bool): Log section durations as timing/*_ms.
         """
         super().__init__()
         self.env = env
@@ -126,7 +131,8 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
         self.last_action = torch.full_like(
             torch.from_numpy(self.env.action_space.sample().astype(np.float32)), float("nan")
         ).to(self.device)
-        self.runner = EpisodeRunner(env, self._policy)
+        self.timings = Timings(enabled=profile)
+        self.runner = EpisodeRunner(env, self._policy, self.timings)
         self.num_steps = 0
         self.num_episodes = -1  # Start at -1 to account for the initial reset.
 
@@ -140,6 +146,10 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
     def select_action(self, obs: torch.Tensor, is_first: bool = False, mode: str = "train") -> torch.Tensor:
         pass
 
+    def measure_gpu(self, name: str):
+        """Time a section that queues GPU work (CUDA events on a GPU)."""
+        return self.timings.measure(name, cuda=self.device.type == "cuda")
+
     def _policy(self, obs: torch.Tensor, is_first: bool, mode: str) -> torch.Tensor:
         # select_action reads last_action to encode the next observation.
         self.last_action[:] = self.select_action(obs.to(self.device), is_first=is_first, mode=mode)
@@ -149,6 +159,7 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
         self.eval_next = False
         self.after_eval = False
         self.runner.done = True  # Start with a new episode.
+        self.last_timings_log = (time.perf_counter(), self.num_steps)
 
     def train_dataloader(self) -> DataLoader:
         if not hasattr(self, "replay_buffer"):
@@ -158,7 +169,7 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
                 self.sequence_length,
                 save_path=self.logger.log_dir + "/replay_buffer",
             )
-        dataset = NumUpdatesWrapper(self.replay_buffer, self.num_updates)
+        dataset = NumUpdatesWrapper(self.replay_buffer, self.num_updates, measure_sampling=self.timings.enabled)
         # The replay buffer is sampled in a single worker process on purpose.
         warnings.filterwarnings("ignore", ".*Consider increasing the value of the `num_workers` argument*")
         dataloader = DataLoader(dataset, batch_size=1, pin_memory=True, num_workers=1)
@@ -169,6 +180,7 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
         num_collect_steps = self.num_seed if self.num_steps == 0 and self.num_seed > 0 else self.update_freq
         for _ in range(num_collect_steps):
             self.collect_step()
+        self.batch_mark = time.perf_counter()
 
     @torch.no_grad()
     def collect_step(self) -> None:
@@ -178,21 +190,24 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
         if self.runner.done:
             self.num_episodes += 1
             if self.eval_next:
-                self.eval_loop()
+                with self.timings.measure("eval/total"):
+                    self.eval_loop()
 
             # Reset environment and store initial observation.
             self.log("train/buffer_size", self.replay_buffer.num_timesteps)
             if self.replay_buffer.last_episode_return is not None:
                 self.log("train/episode_return", self.replay_buffer.last_episode_return.item(), prog_bar=True)
             obs = self.runner.reset()
-            self.replay_buffer.add_step(self._complete_first_timestep({"obs": obs}))
+            with self.timings.measure("replay_buffer/add_step"):
+                self.replay_buffer.add_step(self._complete_first_timestep({"obs": obs}))
             self.log("train/num_episodes", self.num_episodes)
             self.log("train/num_steps", self.num_steps)
 
         # Select action, perform environment step, and store resulting experience.
         mode = "train" if self.num_steps >= self.num_seed else "random"
         obs, reward, done, info = self.runner.step(mode)
-        self.replay_buffer.add_step({"obs": obs, "action": self.last_action.cpu(), "reward": reward}, done=done)
+        with self.timings.measure("replay_buffer/add_step"):
+            self.replay_buffer.add_step({"obs": obs, "action": self.last_action.cpu(), "reward": reward}, done=done)
         self.num_steps += 1
 
     def _complete_first_timestep(self, step_data: dict[str, Any]) -> dict[str, Any]:
@@ -209,7 +224,8 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
         episode_returns, successes = [], []
         for episode_index in range(self.num_eval_episodes):
             episode = self.runner.play_episode(mode="eval")
-            self.log_video(f"eval/episode_{episode_index}", torch.stack(episode["obs"]))
+            with self.timings.measure("eval/video_logging"):
+                self.log_video(f"eval/episode_{episode_index}", torch.stack(episode["obs"]))
             episode_returns.append(sum(episode["reward"]))
             if "success" in episode:
                 successes.append(episode["success"])
@@ -219,23 +235,54 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
 
         for episode_index in range(3):
             episode = self.runner.play_episode(mode="train")
-            self.log_video(f"train/episode_{episode_index}", torch.stack(episode["obs"]))
+            with self.timings.measure("eval/video_logging"):
+                self.log_video(f"train/episode_{episode_index}", torch.stack(episode["obs"]))
 
-        # Save model checkpoint.
-        self.trainer.save_checkpoint(
-            self.checkpoints_dir / f"sold-steps={self.num_steps}-episode={self.num_episodes}-"
-            f"eval_episode_return={np.mean(episode_returns)}.ckpt"
-        )
+        with self.timings.measure("eval/checkpoint"):
+            self.trainer.save_checkpoint(
+                self.checkpoints_dir / f"sold-steps={self.num_steps}-episode={self.num_episodes}-"
+                f"eval_episode_return={np.mean(episode_returns)}.ckpt"
+            )
 
         self.eval_next = False
         self.after_eval = True
 
+    def on_before_batch_transfer(self, batch: Any, dataloader_idx: int) -> Any:
+        if "sample_seconds" in batch:  # From the DataLoader worker.
+            for seconds in batch.pop("sample_seconds").tolist():
+                self.timings.add("replay_buffer/sample", seconds)
+        return batch
+
+    def on_train_batch_start(self, batch: Any, batch_idx: int) -> None:
+        self._time_since_batch_mark("replay_buffer/batch_wait")
+
     def on_train_batch_end(self, outputs: STEP_OUTPUT, batch: Any, batch_idx: int) -> None:
         self.after_eval = False  # Reset 'after_eval' to False after the first training batch.
+        self._time_since_batch_mark("learn/training_step")
+
+    def _time_since_batch_mark(self, name: str) -> None:
+        now = time.perf_counter()
+        self.timings.add(name, now - self.batch_mark)
+        self.batch_mark = now
 
     def on_train_epoch_end(self) -> None:
+        if self.timings.enabled and self.device.type == "cuda":
+            with self.timings.measure("learn/gpu_drain"):
+                torch.cuda.synchronize(self.device)
+        self.log_timings()
         if self.num_steps >= self.max_steps:
             self.trainer.should_stop = True
+
+    def log_timings(self) -> None:
+        """Log the section timings and env steps per second since the last call."""
+        if not (self.timings.enabled and self.is_logging_step("timing/env_steps_per_second")):
+            return
+        for name, milliseconds in self.timings.summary().items():
+            self.log(f"timing/{name}_ms", milliseconds)
+        last_time, last_num_steps = self.last_timings_log
+        now = time.perf_counter()
+        self.log("timing/env_steps_per_second", (self.num_steps - last_num_steps) / (now - last_time))
+        self.last_timings_log = (now, self.num_steps)
 
     @property
     def logging_step(self) -> int:

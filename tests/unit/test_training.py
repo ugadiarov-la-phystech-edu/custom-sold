@@ -8,6 +8,7 @@ import pytest
 import random
 from sold.utils import training
 from sold.utils.episode_runner import EpisodeRunner
+from sold.utils.profiling import Timings
 from sold.utils.training import OnlineProgressBar, print_summary, set_seed
 from tests import fakes
 from tests.conftest import add_episode, make_episode, make_online_trainer, make_tiny_sold
@@ -76,7 +77,7 @@ def test_online_module_runner_updates_the_last_action(tiny_sold):
 
 
 # ----------------------------------------------------------------------------- episode runner
-def _runner(**env_kwargs):
+def _runner(timings=None, **env_kwargs):
     env = fakes.make_fake_env(**env_kwargs)
     calls = []
 
@@ -84,7 +85,18 @@ def _runner(**env_kwargs):
         calls.append((is_first, mode))
         return torch.full((2,), 0.5)
 
-    return EpisodeRunner(env, policy), calls
+    return EpisodeRunner(env, policy, timings), calls
+
+
+def test_episode_runner_times_collection_and_evaluation_separately():
+    timings = Timings()
+    runner, _ = _runner(timings)
+    runner.reset()
+    runner.step("train")
+    assert set(timings.summary()) == {"collect/env_reset", "collect/action_selection", "collect/env_step"}
+    runner.done = True
+    runner.play_episode()
+    assert set(timings.summary()) == {"eval/env_reset", "eval/action_selection", "eval/env_step"}
 
 
 def test_episode_runner_steps_and_marks_the_first_step():
@@ -124,13 +136,29 @@ def test_episode_runner_without_success_info(monkeypatch):
 
 
 def test_on_train_epoch_end_stops_at_max_steps(tiny_sold):
-    tiny_sold.trainer = SimpleNamespace(should_stop=False)
+    tiny_sold.trainer = SimpleNamespace(should_stop=False, is_last_batch=False)
     tiny_sold.num_steps = tiny_sold.max_steps - 1
     tiny_sold.on_train_epoch_end()
     assert tiny_sold.trainer.should_stop is False
     tiny_sold.num_steps = tiny_sold.max_steps
     tiny_sold.on_train_epoch_end()
     assert tiny_sold.trainer.should_stop is True
+
+
+def test_on_train_epoch_end_waits_for_the_gpu(tiny_sold, monkeypatch):
+    synchronized = []
+    monkeypatch.setattr(torch.cuda, "synchronize", synchronized.append)
+    tiny_sold.trainer = SimpleNamespace(should_stop=False, is_last_batch=False)
+    tiny_sold._device = torch.device("cuda")
+    tiny_sold.on_train_epoch_end()
+    assert [device.type for device in synchronized] == ["cuda"] and "learn/gpu_drain" in tiny_sold.timings.summary()
+
+
+def test_sample_durations_are_read_before_the_batch_transfer(tiny_sold):
+    batch = {"obs": torch.zeros(1), "sample_seconds": torch.tensor([0.002], dtype=torch.float64)}
+    assert tiny_sold.on_before_batch_transfer(batch, 0) == {"obs": torch.zeros(1)}
+    assert tiny_sold.on_before_batch_transfer({"obs": torch.zeros(1)}, 0).keys() == {"obs"}
+    assert tiny_sold.timings.summary() == {"replay_buffer/sample": 2.0}
 
 
 def test_on_load_checkpoint_without_replay_buffer(tiny_sold, tmp_path):
@@ -219,6 +247,20 @@ def test_fit_logs_metrics(fitted):
         "train/critic_loss",
         "gradients/actor",
     } <= keys
+    timed = {
+        *(f"collect/{name}" for name in ["action_selection", "env_step", "env_reset"]),
+        *(f"replay_buffer/{name}" for name in ["add_step", "sample", "batch_wait"]),
+        *(f"learn/{name}" for name in ["autoencoder", "imagination", "training_step", "visualization", "logging"]),
+        *(
+            f"learn/{model}_{part}"
+            for model in ["dynamics", "reward", "actor", "critic"]
+            for part in ["loss", "update"]
+        ),
+        "learn/critic_target",
+        *(f"eval/{name}" for name in ["action_selection", "env_step", "env_reset", "video_logging", "checkpoint"]),
+        "eval/total",
+    }
+    assert {f"timing/{name}_ms" for name in timed} | {"timing/env_steps_per_second"} <= keys
     assert [r["step"] for r in records] == sorted(r["step"] for r in records)
     images = os.listdir(log_dir / "images")
     for name in [
@@ -249,8 +291,16 @@ def test_fit_without_saving_replay_buffer_and_with_finetuning(tmp_path):
     )
     assert sold.num_steps == 20
     assert not list(Path(trainer.logger.log_dir, "checkpoints").glob("replay_buffer-*"))
+    records = [json.loads(line) for line in open(Path(trainer.logger.log_dir) / "metrics" / "metrics.jsonl")]
+    assert "timing/learn/autoencoder_update_ms" in set().union(*records)
     checkpoint = torch.load(next(Path(trainer.logger.log_dir, "checkpoints").glob("*.ckpt")), weights_only=False)
     assert "replay_buffer_path" not in checkpoint
+
+
+def test_fit_without_profiling_logs_no_timings(tmp_path):
+    _, trainer = _fit(tmp_path, max_steps=20, profile=False)
+    records = [json.loads(line) for line in open(Path(trainer.logger.log_dir) / "metrics" / "metrics.jsonl")]
+    assert records and not any(key.startswith("timing/") for key in set().union(*records))
 
 
 def test_save_replay_buffer_when_buffer_folder_is_missing(tiny_sold, tmp_path):

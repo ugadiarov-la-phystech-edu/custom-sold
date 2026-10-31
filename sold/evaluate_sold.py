@@ -71,6 +71,7 @@ def evaluate(cfg: DictConfig):
             }
             if len(successes) > 0:
                 record["success_rate"] = sum(successes) / len(successes)
+            record |= {f"timing/{name}_ms": milliseconds for name, milliseconds in sold.timings.summary().items()}
             file.write(json.dumps(record) + "\n")
 
 

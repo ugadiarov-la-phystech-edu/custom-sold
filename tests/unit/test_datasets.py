@@ -202,6 +202,9 @@ def test_num_updates_wrapper(buffer):
     add_episode(buffer, make_episode(4))
     batches = list(NumUpdatesWrapper(buffer, 3))
     assert len(batches) == 3 and batches[0]["obs"].shape == (4, 3, 3, 2, 2)
+    assert "sample_seconds" not in batches[0]
+    timed = next(iter(NumUpdatesWrapper(buffer, 1, measure_sampling=True)))
+    assert timed["sample_seconds"].dtype == torch.float64 and timed["sample_seconds"] >= 0
 
 
 # BUGS_AND_PITFALLS.md #19 (fixed).

@@ -27,14 +27,14 @@ class LoggingStepMixin:
     def logging_step(self) -> int:
         return self.current_epoch
 
+    def is_logging_step(self, name: str) -> bool:
+        """Whether a scalar logged under name now would be written."""
+        return self.trainer.is_last_batch and self.logging_step - self.last_logging_step[name] >= self.max_logging_freq
+
     def log(self, name: str, value: torch.Tensor | float, *args, **kwargs) -> None:
         """Log a scalar; tensors become numbers only when written, not on every call."""
         if isinstance(self.logger, ExtendedTensorBoardLogger):
-            if (
-                kwargs.get("logger", True)
-                and self.trainer.is_last_batch
-                and self.logging_step - self.last_logging_step[name] >= self.max_logging_freq
-            ):
+            if kwargs.get("logger", True) and self.is_logging_step(name):
                 self.last_logging_step[name] = self.logging_step
                 # Through the default float dtype, as in LightningModule.log (45 is written as 45.0).
                 tensor = value if torch.is_tensor(value) else torch.tensor(value, dtype=torch.get_default_dtype())
@@ -53,9 +53,9 @@ class LoggingStepMixin:
             self.logger.log_video(name, video, step=self.logging_step)
 
     def log_gradients(self, model_names: tuple[str, ...]) -> None:
-        if not self.trainer.is_last_batch:
-            return  # Scalars are only written after the epoch's last batch; skip copying gradients.
         for model_name in model_names:
+            if not self.is_logging_step(f"gradients/{model_name}"):
+                continue
             model = getattr(self, model_name)
             grads = [param.grad.detach().flatten() for param in model.parameters() if param.grad is not None]
             self.log(f"gradients/{model_name}", torch.cat(grads).norm())

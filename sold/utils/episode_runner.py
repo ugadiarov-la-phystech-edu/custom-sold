@@ -1,6 +1,7 @@
 from collections import defaultdict
 from collections.abc import Callable
 import gym
+from sold.utils.profiling import Timings
 import torch
 from typing import Any
 
@@ -8,25 +9,31 @@ from typing import Any
 class EpisodeRunner:
     """Steps a policy through an environment, one step or one whole episode at a time.
 
-    The policy is called as policy(obs, is_first=..., mode=...) and returns the action.
+    The policy is called as policy(obs, is_first=..., mode=...) and returns the action. timings records env_reset,
+    action_selection (with the action's copy to the CPU) and env_step under the phase "collect" or "eval".
     """
 
-    def __init__(self, env: gym.Env, policy: Callable[..., torch.Tensor]) -> None:
+    def __init__(self, env: gym.Env, policy: Callable[..., torch.Tensor], timings: Timings | None = None) -> None:
         self.env = env
         self.policy = policy
+        self.timings = timings or Timings(enabled=False)
         self.obs: torch.Tensor | None = None
         self.done = True  # No episode in progress.
         self.is_first = True  # The next step is the first of its episode.
 
-    def reset(self) -> torch.Tensor:
+    def reset(self, phase: str = "collect") -> torch.Tensor:
         """Start a new episode and return its first observation."""
-        self.obs, self.done, self.is_first = self.env.reset(), False, True
+        with self.timings.measure(f"{phase}/env_reset"):
+            self.obs = self.env.reset()
+        self.done, self.is_first = False, True
         return self.obs
 
-    def step(self, mode: str) -> tuple[torch.Tensor, float, bool, dict[str, Any]]:
+    def step(self, mode: str, phase: str = "collect") -> tuple[torch.Tensor, float, bool, dict[str, Any]]:
         """Take an action chosen in mode ("train", "eval" or "random"); return obs, reward, done, info."""
-        action = self.policy(self.obs, is_first=self.is_first, mode=mode)
-        self.obs, reward, self.done, info = self.env.step(action.cpu())
+        with self.timings.measure(f"{phase}/action_selection"):
+            action = self.policy(self.obs, is_first=self.is_first, mode=mode).cpu()
+        with self.timings.measure(f"{phase}/env_step"):
+            self.obs, reward, self.done, info = self.env.step(action)
         self.is_first = False
         return self.obs, reward, self.done, info
 
@@ -50,9 +57,9 @@ class EpisodeRunner:
             if render is not None:
                 episode["rendered"].append(render(self.env))
 
-        record(self.reset())
+        record(self.reset(phase="eval"))
         while not self.done:
-            obs, reward, _, info = self.step(mode)
+            obs, reward, _, info = self.step(mode, phase="eval")
             episode["reward"].append(reward)
             record(obs)
 

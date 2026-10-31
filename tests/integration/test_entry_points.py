@@ -224,6 +224,7 @@ def test_evaluate_sold(monkeypatch, tmp_path, sold_run):
     record = json.loads(open(out / "metrics.jsonl").read())
     assert record["step"] == 24 and record["checkpoint"] == str(checkpoint)
     assert len(record["episode_returns"]) == 2 and 0.0 <= record["success_rate"] <= 1.0
+    assert {"timing/eval/action_selection_ms", "timing/eval/env_step_ms"} <= record.keys()
     videos = sorted(os.listdir(out / "videos" / checkpoint.stem))
     assert videos == ["episode_high_res_0.mp4", "episode_high_res_1.mp4", "episode_obs_0.mp4", "episode_obs_1.mp4"]
 
