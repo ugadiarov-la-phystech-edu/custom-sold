@@ -327,10 +327,10 @@ def test_log_reconstruction_logs_first_sample_only_when_due():
     callback.on_train_batch_end(None, module, outputs, None, 0)
     passed = module.autoencoder.visualize_reconstruction.call_args.args[0]
     assert set(passed) == {"images"} and passed["images"].shape == (3, 3, 4, 4)
-    module.log.assert_called_once()
+    module.log_image.assert_called_once()
     module = _pl_module("x", is_last_batch=False)
     callback.on_train_batch_end(None, module, outputs, None, 0)
-    module.log.assert_not_called()
+    module.log_image.assert_not_called()
 
 
 @pytest.mark.xfail(strict=True, reason="BUGS_AND_PITFALLS.md #31: Slot Attention scales by the wrong dimension")

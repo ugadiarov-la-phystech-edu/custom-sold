@@ -161,15 +161,15 @@ class SOLDModule(OnlineModule):
         reconstruction: the autoencoder's outputs; outputs: those of compute_dynamics_loss and compute_reward_loss.
         Attention maps show the reward predictor and actor after this step's update.
         """
-        self.log("autoencoder_reconstruction", self.autoencoder.visualize_reconstruction(
+        self.log_image("autoencoder_reconstruction", self.autoencoder.visualize_reconstruction(
             {k: v[0] for k, v in reconstruction.items() if v.dim() > 0}))
-        self.log("dynamics_prediction", dynamics_figure(self.autoencoder, reconstruction, outputs["num_context"],
+        self.log_image("dynamics_prediction", dynamics_figure(self.autoencoder, reconstruction, outputs["num_context"],
                                                         outputs["predicted_outputs"]))
         figures = reward_figures(self.reward_predictor, reconstruction, rewards, outputs["predicted_rewards"])
         figures |= imagination_figures(self.autoencoder, self.actor, imagination.imagined_slots,
                                        imagination.num_context, imagination.predicted_rewards)
         for name, image in figures.items():
-            self.log(name, image)
+            self.log_image(name, image)
 
     def _optimize(self, optimizer, loss: torch.Tensor, grad_clip: float) -> None:
         """One gradient step on loss, with the gradient norm clipped to grad_clip."""

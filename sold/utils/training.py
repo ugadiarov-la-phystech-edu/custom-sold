@@ -185,7 +185,7 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
         episode_returns, successes = [], []
         for episode_index in range(self.num_eval_episodes):
             episode = self.play_episode(mode="eval")
-            self.log(f"eval/episode_{episode_index}", torch.stack(episode["obs"]))
+            self.log_video(f"eval/episode_{episode_index}", torch.stack(episode["obs"]))
             episode_returns.append(sum(episode["reward"]))
             if "success" in episode:
                 successes.append(episode["success"])
@@ -195,7 +195,7 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
 
         for episode_index in range(3):
             episode = self.play_episode(mode="train")
-            self.log(f"train/episode_{episode_index}", torch.stack(episode["obs"]))
+            self.log_video(f"train/episode_{episode_index}", torch.stack(episode["obs"]))
 
         # Save model checkpoint.
         self.trainer.save_checkpoint(self.checkpoints_dir / f"sold-steps={self.num_steps}-episode={self.num_episodes}-"

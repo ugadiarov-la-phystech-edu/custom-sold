@@ -116,37 +116,48 @@ class _Module(LoggingStepMixin, _Recorder):
     def logging_step(self):
         return self.step
 
-    def _LightningModule__to_tensor(self, value, name):
-        return torch.as_tensor(value)
 
-
-def test_logging_step_mixin_routes_images_videos_and_scalars():
+def test_logging_step_mixin_logs_images_and_videos():
     logger = mock.MagicMock(spec=ExtendedTensorBoardLogger)
     module = _Module(logger, step=4)
-    module.log("img", torch.zeros(3, 2, 2))
-    logger.log_image.assert_called_once_with("img", mock.ANY, step=4)
-    module.log("vid", torch.zeros(2, 3, 2, 2))
-    logger.log_video.assert_called_once_with("vid", mock.ANY, step=4)
-    module.log("matrix", torch.zeros(2, 2))  # Neither image nor video: dropped.
-    assert module.calls == []
+    image, video = torch.zeros(3, 2, 2), torch.zeros(2, 3, 2, 2)
+    module.log_image("img", image)
+    logger.log_image.assert_called_once_with("img", image, step=4)
+    module.log_video("vid", video)
+    logger.log_video.assert_called_once_with("vid", video, step=4)
+    assert module.calls == []  # Not forwarded to Lightning's scalar logging.
 
-    module.log("loss", torch.tensor(0.5), prog_bar=True)
+
+def test_logging_step_mixin_writes_scalars_once_per_logging_step():
+    logger = mock.MagicMock(spec=ExtendedTensorBoardLogger)
+    module = _Module(logger, step=4)
+    loss = torch.tensor(0.5, requires_grad=True)
+    module.log("loss", loss, prog_bar=True)
     logger.log_metrics.assert_called_once_with({"loss": 0.5}, step=4)
-    assert module.calls == [("loss", 0.5, {"prog_bar": True, "logger": False})]
+    name, forwarded, kwargs = module.calls[0]
+    assert (name, kwargs) == ("loss", {"prog_bar": True, "logger": False})
+    assert forwarded is loss  # Converted only if written; LightningModule.log detaches it.
+    module.log("count", 45)
+    logger.log_metrics.assert_called_with({"count": 45.0}, step=4)  # Numbers become floats, as in Lightning.
+    module.log("mean", np.float64(1 / 3))  # Through float32, like LightningModule.log.
+    logger.log_metrics.assert_called_with({"mean": torch.tensor(1 / 3).item()}, step=4)
     module.log("loss", 0.25)  # Same step: throttled for the logger, still forwarded.
-    assert logger.log_metrics.call_count == 1 and len(module.calls) == 2
+    assert logger.log_metrics.call_count == 3 and len(module.calls) == 4
     module.log("hidden", 1.0, logger=False)
-    assert logger.log_metrics.call_count == 1
+    assert logger.log_metrics.call_count == 3
     module.trainer.is_last_batch = False
     module.step = 10
     module.log("loss", 2.0)
-    assert logger.log_metrics.call_count == 1
+    assert logger.log_metrics.call_count == 3
 
 
 def test_logging_step_mixin_other_loggers_and_default_step():
     module = _Module(logger=None)
     module.log("x", 1.0, prog_bar=True)
     assert module.calls == [("x", 1.0, {"prog_bar": True})]
+    module.log_image("img", torch.zeros(3, 2, 2))  # Only ExtendedTensorBoardLogger stores images and videos.
+    module.log_video("vid", torch.zeros(2, 3, 2, 2))
+    assert len(module.calls) == 1
     module.current_epoch = 3
     assert LoggingStepMixin.logging_step.fget(module) == 3
 
@@ -157,8 +168,12 @@ def test_log_gradients_logs_norm_of_available_grads():
     module.net.weight.grad = torch.full((1, 2), 3.0)
     module.net.bias.grad = None
     module.log_gradients(("net",))
-    assert module.calls[0][0] == "gradients/net"
-    assert module.calls[0][1] == pytest.approx(np.sqrt(18.0))
+    name, norm, _ = module.calls[0]
+    assert name == "gradients/net" and torch.is_tensor(norm)  # Converted only if it is written.
+    assert norm.item() == pytest.approx(np.sqrt(18.0))
+    module.trainer.is_last_batch = False  # Nothing would be written, so no norms are computed.
+    module.log_gradients(("net",))
+    assert len(module.calls) == 1
 
 
 # BUGS_AND_PITFALLS.md #18 (fixed).

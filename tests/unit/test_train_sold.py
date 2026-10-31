@@ -150,7 +150,7 @@ def test_imagine_ahead_shapes(from_every):
 def _log_visualizations(sold):
     """Compute one batch's losses as training_step does and log the figures; returns the logged names."""
     recorder = LogRecorder()
-    sold.log = recorder
+    sold.log = sold.log_image = recorder
     images, actions, rewards = _batch(sold)
     reconstruction = reconstruction_loss(sold.autoencoder, images, actions)
     slots = reconstruction["slots"].detach()

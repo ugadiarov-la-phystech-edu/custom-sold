@@ -12,7 +12,11 @@ from typing import Any, Mapping, Optional, Tuple, Union
 
 
 class LoggingStepMixin(ABC):
-    """Directly specify a 'logging_step' instead of using Pytorch Lightning's automatic logging."""
+    """Log against a custom 'logging_step' instead of Lightning's global step.
+
+    With an ExtendedTensorBoardLogger, scalars are written once per logging step (after the epoch's last batch, at most
+    every max_logging_freq steps); images and videos immediately.
+    """
 
     def __init__(self, max_logging_freq: int = 1) -> None:
         super().__init__()
@@ -23,29 +27,31 @@ class LoggingStepMixin(ABC):
     def logging_step(self) -> int:
         return self.current_epoch
 
-    def log(self, name: str, value: Any, *args, **kwargs) -> None:
+    def log(self, name: str, value: Union[torch.Tensor, float], *args, **kwargs) -> None:
+        """Log a scalar; tensors become numbers only when written, not on every call."""
         if isinstance(self.logger, ExtendedTensorBoardLogger):
-            if isinstance(value, torch.Tensor) and value.numel() > 1:
-                if value.dim() == 3:
-                    self.logger.log_image(name, value, step=self.logging_step)
-                elif value.dim() == 4:
-                    self.logger.log_video(name, value, step=self.logging_step)
-            else:
-                value = self._LightningModule__to_tensor(value, name).item()
-                if kwargs.get("logger", True):
-                    # Log metrics after the last batch.
-                    if self.trainer.is_last_batch:
-                        if self.logging_step - self.last_logging_step[name] >= self.max_logging_freq:
-                            self.last_logging_step[name] = self.logging_step
-                            self.logger.log_metrics({name: value}, step=self.logging_step)
+            if (kwargs.get("logger", True) and self.trainer.is_last_batch
+                    and self.logging_step - self.last_logging_step[name] >= self.max_logging_freq):
+                self.last_logging_step[name] = self.logging_step
+                # Through the default float dtype, as in LightningModule.log (45 is written as 45.0).
+                tensor = value if torch.is_tensor(value) else torch.tensor(value, dtype=torch.get_default_dtype())
+                self.logger.log_metrics({name: tensor.item()}, step=self.logging_step)
+            kwargs["logger"] = False  # Written above; Lightning still gets it for the progress bar and callbacks.
+        super().log(name, value, *args, **kwargs)
 
-                kwargs["logger"] = False
-                super().log(name, value, *args, **kwargs)
+    def log_image(self, name: str, image: torch.Tensor) -> None:
+        """Log an image (3, height, width) in [0, 1] (ExtendedTensorBoardLogger only)."""
+        if isinstance(self.logger, ExtendedTensorBoardLogger):
+            self.logger.log_image(name, image, step=self.logging_step)
 
-        else:
-            super().log(name, value, *args, **kwargs)
+    def log_video(self, name: str, video: torch.Tensor) -> None:
+        """Log a video (time, 3, height, width) (ExtendedTensorBoardLogger only)."""
+        if isinstance(self.logger, ExtendedTensorBoardLogger):
+            self.logger.log_video(name, video, step=self.logging_step)
 
     def log_gradients(self, model_names: Tuple[str, ...]) -> None:
+        if not self.trainer.is_last_batch:
+            return  # Scalars are only written after the epoch's last batch; skip copying gradients.
         for model_name in model_names:
             model = getattr(self, model_name)
             grads = [
@@ -53,8 +59,7 @@ class LoggingStepMixin(ABC):
                 for param in model.parameters()
                 if param.grad is not None
             ]
-            norm = torch.cat(grads).norm()
-            self.log(f"gradients/{model_name}", norm.item())
+            self.log(f"gradients/{model_name}", torch.cat(grads).norm())
 
 
 class ExtendedTensorBoardLogger(TensorBoardLogger):
