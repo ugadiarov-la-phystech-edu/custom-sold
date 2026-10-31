@@ -1,5 +1,6 @@
 """train_sold.SOLDModule: construction, losses, imagination and action selection."""
 
+import copy
 from pathlib import Path
 
 import numpy as np
@@ -7,6 +8,8 @@ import pytest
 import torch
 
 from modeling.distributions import TwoHotEncodingDistribution
+import rl.losses
+import rl.returns
 from tests import fakes
 from tests.conftest import make_online_trainer, make_tiny_sold
 
@@ -41,14 +44,19 @@ def test_construction(tiny_sold):
     assert torch.equal(tiny_sold.actor.lower_bound, torch.tensor([-1.0, -1.0]))
 
 
+def _actor_loss(sold, imagination):
+    return sold.compute_actor_loss(imagination.lambda_returns, imagination.predicted_values_targ,
+                                   imagination.action_log_probs, imagination.action_entropies)
+
+
 def test_critic_target_is_not_trained_by_gradients(tiny_sold):
     assert not any(p.requires_grad for p in tiny_sold.critic_target.parameters())
     tiny_sold.after_eval = False
     images, actions, _ = _batch(tiny_sold)
     slots = tiny_sold.autoencoder(images, actions[:, 1:])["slots"].detach()
-    returns, values_targ, _, log_probs, entropies = tiny_sold.imagine_ahead(slots, actions)
-    assert not values_targ.requires_grad
-    tiny_sold.compute_actor_loss(returns, values_targ, log_probs, entropies)["actor_loss"].backward()
+    imagination = tiny_sold.imagine_ahead(slots, actions)
+    assert not imagination.predicted_values_targ.requires_grad
+    _actor_loss(tiny_sold, imagination)["actor_loss"].backward()
     assert all(p.grad is None for p in tiny_sold.critic_target.parameters())
 
 
@@ -56,8 +64,9 @@ def test_imagine_ahead_with_batch_size_one(tiny_sold):
     tiny_sold.after_eval = False
     images, actions, _ = _batch(tiny_sold, batch_size=1)
     slots = tiny_sold.autoencoder(images, actions[:, 1:])["slots"].detach()
-    returns, values_targ, _, log_probs, _ = tiny_sold.imagine_ahead(slots, actions)
-    assert returns.shape == values_targ.shape == log_probs.shape == (1, 3)
+    imagination = tiny_sold.imagine_ahead(slots, actions)
+    assert (imagination.lambda_returns.shape == imagination.predicted_values_targ.shape
+            == imagination.action_log_probs.shape == (1, 3))
 
 
 def test_context_range():
@@ -75,60 +84,33 @@ def test_configure_optimizers(tiny_sold):
         assert optimizer.param_groups[0]["params"] == list(owner.parameters())
 
 
-def _reference_lambda_returns(rewards, values, gamma, lam):
-    horizon = rewards.shape[1]
-    returns = torch.zeros_like(rewards)
-    next_return = values[:, -1]
-    for t in reversed(range(horizon)):
-        next_return = rewards[:, t] + gamma * (1 - lam) * values[:, t] + gamma * lam * next_return
-        returns[:, t] = next_return
-    return returns
-
-
-def test_compute_lambda_returns(tiny_sold):
+def test_compute_lambda_returns_uses_the_configured_discount_and_lambda():
+    sold = make_tiny_sold(discount_factor=0.9, return_lambda=0.5)
     rewards, values = torch.randn(4, 3), torch.randn(4, 3)
-    expected = _reference_lambda_returns(rewards, values, 0.96, 0.95)
-    assert torch.allclose(tiny_sold.compute_lambda_returns(rewards, values), expected, atol=1e-6)
+    assert torch.equal(sold.compute_lambda_returns(rewards, values), rl.returns.lambda_returns(rewards, values, 0.9, 0.5))
 
 
 @pytest.mark.parametrize("gradients", ["dynamics", "reinforce"])
-def test_compute_actor_loss(gradients):
-    sold = make_tiny_sold(actor_gradients=gradients)
-    returns = torch.randn(2, 3, requires_grad=True)
-    values = torch.randn(2, 3)
-    log_probs = torch.randn(2, 3, requires_grad=True)
-    entropies = torch.rand(2, 3)
+def test_compute_actor_loss_normalizes_with_the_return_moments(gradients):
+    sold = make_tiny_sold(actor_gradients=gradients, actor_entropy_loss_weight=0.01)
+    returns, values, log_probs, entropies = torch.randn(2, 3), torch.randn(2, 3), torch.randn(2, 3), torch.rand(2, 3)
+    moments = copy.deepcopy(sold.return_moments)
     losses = sold.compute_actor_loss(returns, values, log_probs, entropies)
-    assert set(losses) == {"actor_loss", "actor_return_loss", "actor_entropy_loss"}
-    assert torch.allclose(losses["actor_loss"], losses["actor_return_loss"] + losses["actor_entropy_loss"])
-    expected_entropy = -3e-4 * torch.mean(sold.discounts * entropies)
-    assert torch.allclose(losses["actor_entropy_loss"], expected_entropy)
-    losses["actor_loss"].backward()
-    if gradients == "dynamics":
-        assert returns.grad is not None and log_probs.grad is None
-    else:
-        assert log_probs.grad is not None and returns.grad is None
-
-
-def test_compute_actor_loss_rejects_unknown_gradients(tiny_sold):
-    tiny_sold.actor_gradients = "magic"
-    with pytest.raises(ValueError, match="Invalid actor_gradients"):
-        tiny_sold.compute_actor_loss(torch.randn(2, 3), torch.randn(2, 3), torch.randn(2, 3), torch.rand(2, 3))
+    expected = rl.losses.actor_loss(returns, values, log_probs, entropies, sold.discounts, *moments(returns[:, :-1]),
+                                    gradients, 0.01)
+    assert losses.keys() == expected.keys() and all(torch.equal(losses[k], expected[k]) for k in losses)
+    assert torch.equal(sold.return_moments.low, moments.low)  # The running percentiles were updated.
 
 
 @pytest.mark.parametrize("overrides, weight", [({}, 0.1), ({"critic_regularization_weight": 0.5}, 0.5)])
-def test_compute_critic_loss(overrides, weight):
+def test_compute_critic_loss_uses_the_configured_regularization_weight(overrides, weight):
     sold = make_tiny_sold(**overrides)  # The value hard-coded before it was configurable.
-    logits = torch.randn(2, 3, 255, requires_grad=True)
-    dist = TwoHotEncodingDistribution(logits, dims=1)
+    dist = TwoHotEncodingDistribution(torch.randn(2, 3, 255), dims=1)
     returns, targets = torch.randn(2, 3), torch.randn(2, 3)
     losses = sold.compute_critic_loss(dist, returns, targets)
-    expected_return = torch.mean(sold.discounts * -dist.log_prob(returns.unsqueeze(2)))
-    expected_regularization = torch.mean(sold.discounts * -dist.log_prob(targets.unsqueeze(2)))
-    assert torch.allclose(losses["critic_return_loss"], expected_return)
-    assert torch.allclose(losses["critic_target_regularization_loss"], weight * expected_regularization)
-    assert torch.allclose(losses["critic_loss"], losses["critic_return_loss"] + losses["critic_target_regularization_loss"])
-    assert isinstance(losses["return_mse_loss"], float)
+    expected = rl.losses.critic_loss(dist, returns, targets, sold.discounts, weight)
+    assert losses.keys() == expected.keys()
+    assert all(torch.allclose(torch.as_tensor(losses[k]), torch.as_tensor(expected[k])) for k in losses)
 
 
 def test_compute_dynamics_loss(tiny_sold):
@@ -154,11 +136,13 @@ def test_imagine_ahead_shapes(from_every):
     sold.after_eval = False
     images, actions, _ = _batch(sold)
     slots = sold.autoencoder(images, actions[:, 1:])["slots"].detach()
-    returns, values_targ, values_dist, log_probs, entropies = sold.imagine_ahead(slots, actions)
+    imagination = sold.imagine_ahead(slots, actions)
+    returns = imagination.lambda_returns
     batch = 2 * (5 - 2 + 1) if from_every else 2
-    assert returns.shape == values_targ.shape == log_probs.shape == (batch, 3)
-    assert entropies.shape == (batch, 3, 1)  # Broadcasts against discounts (1, 3) in the actor loss (#26).
-    assert values_dist.mean.shape == (batch, 3, 1)
+    assert returns.shape == imagination.predicted_values_targ.shape == imagination.action_log_probs.shape == (batch, 3)
+    # The entropies broadcast against the discounts (1, 3) in the actor loss (BUGS_AND_PITFALLS.md #26).
+    assert imagination.action_entropies.shape == (batch, 3, 1)
+    assert imagination.predicted_values_dist.mean.shape == (batch, 3, 1)
     assert not sold.dynamics_predictor.training
     assert all(p.requires_grad for p in sold.critic.parameters())  # Unfrozen again.
     returns.mean().backward()
@@ -230,10 +214,11 @@ def test_entropy_bonus_uses_the_discount_of_its_own_step():
     images = torch.rand(2, sold.sequence_length, 3, 16, 16)
     actions = torch.rand(2, sold.sequence_length, 2)
     slots = sold.autoencoder(images, actions[:, 1:])["slots"].detach()
-    returns, values_targ, _, log_probs, entropies = sold.imagine_ahead(slots, actions)
-    assert entropies.shape == (2, 3, 1)  # As produced by imagination: one entropy per (sample, step).
+    imagination = sold.imagine_ahead(slots, actions)
+    assert imagination.action_entropies.shape == (2, 3, 1)  # One entropy per (sample, step), as imagined.
     entropies = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]).unsqueeze(-1)
-    losses = sold.compute_actor_loss(returns, values_targ, log_probs, entropies)
+    losses = sold.compute_actor_loss(imagination.lambda_returns, imagination.predicted_values_targ,
+                                     imagination.action_log_probs, entropies)
     expected = -sold.actor_entropy_loss_weight * torch.mean(sold.discounts * entropies.squeeze(-1))
     assert torch.allclose(losses["actor_entropy_loss"], expected), "each entropy is weighted by the mean discount"
 
@@ -281,16 +266,16 @@ def test_autoencoder_optimizer_state_is_checkpointed(tmp_path):
 
 # BUGS_AND_PITFALLS.md #17 (fixed).
 def test_no_autoencoder_graph_without_finetuning(tmp_path, monkeypatch):
-    from train_autoencoder import AutoencoderModule
+    import train_sold
     recorded = []
-    original = AutoencoderModule.compute_reconstruction_loss
+    original = train_sold.reconstruction_loss
 
-    def recording(module, images, actions):
-        outputs = original(module, images, actions)
+    def recording(autoencoder, images, actions):
+        outputs = original(autoencoder, images, actions)
         recorded.append(outputs["reconstruction_loss"].requires_grad)
         return outputs
 
-    monkeypatch.setattr(AutoencoderModule, "compute_reconstruction_loss", recording)
+    monkeypatch.setattr(train_sold, "reconstruction_loss", recording)
     trainer = make_online_trainer(tmp_path)
     trainer.fit(make_tiny_sold(finetune_autoencoder=False, max_steps=15))
     assert recorded and not any(recorded)

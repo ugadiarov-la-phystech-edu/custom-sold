@@ -2,11 +2,11 @@ import hydra
 from lightning import LightningModule
 from lightning.pytorch.utilities.types import Optimizer, OptimizerLRScheduler, STEP_OUTPUT
 from modeling.autoencoder.base import Autoencoder
+from modeling.autoencoder.losses import reconstruction_loss
 from omegaconf import DictConfig
 import os
 from termcolor import colored
 import torch
-import torch.nn.functional as F
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 from utils.instantiate import instantiate_trainer, instantiate_dataloaders, fill_in_missing
 from utils.logging import LoggingStepMixin
@@ -34,9 +34,7 @@ class AutoencoderModule(LoggingStepMixin, LightningModule):
         return {"optimizer": optimizer}
 
     def compute_reconstruction_loss(self, images: torch.Tensor, actions: torch.Tensor) -> Dict[str, Any]:
-        outputs = self.autoencoder(images, actions[:, 1:])
-        loss = F.mse_loss(outputs["reconstructions"], images)
-        return {**outputs, "reconstruction_loss": loss, "images": images}
+        return reconstruction_loss(self.autoencoder, images, actions)
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_index: int) -> STEP_OUTPUT:
         images, actions = batch

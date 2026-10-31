@@ -108,9 +108,11 @@ def tiny_sold_losses():
     losses = {"reconstruction_loss": torch.mean((outputs["reconstructions"] - images) ** 2)}
     losses |= sold.compute_dynamics_loss(images, slots, actions)
     losses |= sold.compute_reward_loss(images, outputs["reconstructions"], slots, rewards)
-    returns, values_targ, values_dist, log_probs, entropies = sold.imagine_ahead(slots, actions)
-    losses |= sold.compute_actor_loss(returns, values_targ, log_probs, entropies)
-    losses |= sold.compute_critic_loss(values_dist, returns, values_targ)
+    imagination = sold.imagine_ahead(slots, actions)
+    losses |= sold.compute_actor_loss(imagination.lambda_returns, imagination.predicted_values_targ,
+                                      imagination.action_log_probs, imagination.action_entropies)
+    losses |= sold.compute_critic_loss(imagination.predicted_values_dist, imagination.lambda_returns,
+                                       imagination.predicted_values_targ)
     return {key: torch.as_tensor(value).detach() for key, value in losses.items()}
 
 

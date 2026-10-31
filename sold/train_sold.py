@@ -1,22 +1,35 @@
 from collections import defaultdict
 import copy
+from dataclasses import dataclass
 import gym
 import hydra
 from lightning.pytorch.utilities.types import OptimizerLRScheduler, STEP_OUTPUT
 from modeling.distributions import Moments
 from modeling.autoencoder.base import Autoencoder
+from modeling.autoencoder.losses import reconstruction_loss
 import numpy as np
 from omegaconf import DictConfig
 import os
 import torch
 import torch.distributions as D
 import torch.nn.functional as F
-from train_autoencoder import AutoencoderModule
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Tuple
+import rl.losses
+import rl.returns
 from utils.instantiate import instantiate_trainer
 from utils.module import FreezeParameters
 from utils.training import set_seed, print_summary, OnlineModule
 from utils.visualizations import visualize_reward_prediction, visualize_output_attention, visualize_reward_predictor_attention, get_attention_weights
+
+
+@dataclass
+class Imagination:
+    """Outputs of SOLDModule.imagine_ahead for horizon imagined steps."""
+    lambda_returns: torch.Tensor  # (batch_size, horizon)
+    predicted_values_targ: torch.Tensor  # Target critic's values, (batch_size, horizon).
+    predicted_values_dist: D.Distribution  # Critic's predictions, mean of shape (batch_size, horizon, 1).
+    action_log_probs: torch.Tensor  # (batch_size, horizon)
+    action_entropies: torch.Tensor  # (batch_size, horizon, 1)
 
 
 class SOLDModule(OnlineModule):
@@ -98,7 +111,7 @@ class SOLDModule(OnlineModule):
             autoencoder_optimizer.zero_grad()
         # Without fine-tuning, the autoencoder forward pass needs no autograd graph.
         with torch.set_grad_enabled(self.finetune_autoencoder):
-            outputs = AutoencoderModule.compute_reconstruction_loss(self, images, actions)
+            outputs = reconstruction_loss(self.autoencoder, images, actions)
         if self.finetune_autoencoder:
             self.manual_backward(outputs["reconstruction_loss"])
             self.clip_gradients(autoencoder_optimizer, gradient_clip_val=self.autoencoder_grad_clip,
@@ -127,22 +140,23 @@ class SOLDModule(OnlineModule):
         reward_optimizer.step()
 
         # Update the target critic network.
-        for critic_param, critic_target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
-            critic_target_param.data.copy_((1 - self.critic_ema_decay) * critic_param.data + self.critic_ema_decay * critic_target_param.data)
+        rl.returns.ema_update(self.critic_target, self.critic, self.critic_ema_decay)
 
         # Perform latent imagination to train the actor and critic.
-        lambda_returns, predicted_values_targ, predicted_values_dist, action_log_probs, action_entropies = self.imagine_ahead(slots, actions)
+        imagination = self.imagine_ahead(slots, actions)
 
         # Learn the actor.
         actor_optimizer.zero_grad()
-        outputs |= self.compute_actor_loss(lambda_returns, predicted_values_targ, action_log_probs, action_entropies)
+        outputs |= self.compute_actor_loss(imagination.lambda_returns, imagination.predicted_values_targ,
+                                           imagination.action_log_probs, imagination.action_entropies)
         self.manual_backward(outputs["actor_loss"])
         self.clip_gradients(actor_optimizer, gradient_clip_val=self.actor_grad_clip, gradient_clip_algorithm="norm")
         actor_optimizer.step()
 
         # Learn the critic.
         critic_optimizer.zero_grad()
-        outputs |= self.compute_critic_loss(predicted_values_dist, lambda_returns, predicted_values_targ)
+        outputs |= self.compute_critic_loss(imagination.predicted_values_dist, imagination.lambda_returns,
+                                            imagination.predicted_values_targ)
         self.manual_backward(outputs["critic_loss"])
         self.clip_gradients(critic_optimizer, gradient_clip_val=self.critic_grad_clip, gradient_clip_algorithm="norm")
         critic_optimizer.step()
@@ -208,7 +222,7 @@ class SOLDModule(OnlineModule):
         return {"reward_loss": -masked_log_probs.mean(),
                 "reward_mse_loss": F.mse_loss(predicted_rewards_dist.mean.squeeze(2)[~is_firsts], rewards[~is_firsts]).item()}
 
-    def imagine_ahead(self, slots: torch.Tensor, actions: torch.Tensor) -> List[torch.Tensor]:
+    def imagine_ahead(self, slots: torch.Tensor, actions: torch.Tensor) -> Imagination:
         self.dynamics_predictor.eval()
         batch_size, sequence_length, num_slots, slot_dim = slots.size()
         action_log_probs, action_entropies = [], []
@@ -272,43 +286,23 @@ class SOLDModule(OnlineModule):
                     output_weights = get_attention_weights(self.actor, slots_context[:1, :num_context + self.imagination_horizon])
                     actor_attention_image = visualize_output_attention(output_weights, outputs["reconstructions"][0], outputs["rgbs"][0], outputs["masks"][0])
                     self.log("actor_attention", actor_attention_image)
-        return lambda_returns, predicted_values_targ, predicted_values_dist, action_log_probs, action_entropies
+        return Imagination(lambda_returns, predicted_values_targ, predicted_values_dist, action_log_probs,
+                           action_entropies)
 
     def compute_actor_loss(self, lambda_returns: torch.Tensor, predicted_values_targ: torch.Tensor,
                            action_log_probs: torch.Tensor, action_entropies: torch.Tensor) -> Dict[str, Any]:
-        # Compute advantage estimates.
-        offset, invscale = self.return_moments(lambda_returns[:, :-1])
-        normed_lambda_returns = (lambda_returns[:, :-1] - offset) / invscale
-        normed_base = (predicted_values_targ[:, :-1] - offset) / invscale
-        advantage = normed_lambda_returns - normed_base
-
-        if self.actor_gradients == "dynamics":
-            actor_return_loss = -torch.mean(self.discounts.detach()[:, :-1] * advantage)
-        elif self.actor_gradients == "reinforce":
-            actor_return_loss = torch.mean(action_log_probs[:, :-1] * advantage.detach())
-        else:
-            raise ValueError(f"Invalid actor_gradients: {self.actor_gradients}.")
-
-        actor_entropy_loss = -torch.mean(self.discounts.detach() * action_entropies)
-        return {"actor_loss": actor_return_loss + self.actor_entropy_loss_weight * actor_entropy_loss, "actor_return_loss": actor_return_loss,
-                "actor_entropy_loss": self.actor_entropy_loss_weight * actor_entropy_loss}
+        offset, invscale = self.return_moments(lambda_returns[:, :-1])  # Updates the running return percentiles.
+        return rl.losses.actor_loss(lambda_returns, predicted_values_targ, action_log_probs, action_entropies,
+                                    self.discounts, offset, invscale, self.actor_gradients,
+                                    self.actor_entropy_loss_weight)
 
     def compute_critic_loss(self, predicted_values_dist: D.Distribution, lambda_returns: torch.Tensor,
                             predicted_values_targ: torch.Tensor) -> Dict[str, Any]:
-        return_loss = torch.mean(self.discounts.detach() * (-predicted_values_dist.log_prob(lambda_returns.detach().unsqueeze(2))))
-        target_regularization_loss = torch.mean(self.discounts.detach() * (-predicted_values_dist.log_prob(predicted_values_targ.detach().unsqueeze(2))))
-        return {"critic_loss": return_loss + self.critic_regularization_weight * target_regularization_loss,
-                "critic_return_loss": return_loss,
-                "critic_target_regularization_loss": self.critic_regularization_weight * target_regularization_loss,
-                "return_mse_loss": F.mse_loss(predicted_values_dist.mean.squeeze(2), lambda_returns).item()}
+        return rl.losses.critic_loss(predicted_values_dist, lambda_returns, predicted_values_targ, self.discounts,
+                                     self.critic_regularization_weight)
 
-    def compute_lambda_returns(self, rewards, values):
-        vals = [values[:, -1:]]
-        interm = rewards + self.discount_factor * values * (1 - self.return_lambda)
-        for t in reversed(range(self.imagination_horizon)):
-            vals.append(interm[:, t].unsqueeze(1) + self.discount_factor * self.return_lambda * vals[-1])
-        ret = torch.cat(list(reversed(vals)), dim=1)[:, :-1]
-        return ret
+    def compute_lambda_returns(self, rewards: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
+        return rl.returns.lambda_returns(rewards, values, self.discount_factor, self.return_lambda)
 
     def select_action(self, observation: torch.Tensor, is_first: bool = False, mode: str = "train") -> torch.Tensor:
         observation = observation.unsqueeze(0) / 255.  # Expand batch dimension (1, 3, height, width).
