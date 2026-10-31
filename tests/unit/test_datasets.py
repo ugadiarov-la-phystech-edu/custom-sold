@@ -2,6 +2,7 @@
 
 from collections import deque
 import copy
+import logging
 
 import numpy as np
 import pytest
@@ -136,9 +137,10 @@ def test_ring_buffer_is_empty_warns_when_episodes_are_too_short(buffer):
         assert buffer.is_empty
 
 
-def test_ring_buffer_files_and_load_from_disk_storage(buffer, tmp_path, capsys):
-    add_episode(buffer, make_episode(4))
-    assert "Total estimated replay buffer size (GB)" in capsys.readouterr().out
+def test_ring_buffer_files_and_load_from_disk_storage(buffer, tmp_path, caplog):
+    with caplog.at_level(logging.INFO, logger="datasets.ring_buffer"):
+        add_episode(buffer, make_episode(4))
+    assert "Total estimated replay buffer size (GB)" in caplog.text
     buffer.ring_buffer["obs"].flush()
     assert sorted(p.name for p in (tmp_path / "rb").iterdir()) == ["action.dat", "obs.dat", "reward.dat"]
 

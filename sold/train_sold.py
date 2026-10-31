@@ -1,5 +1,3 @@
-import os
-os.environ["HYDRA_FULL_ERROR"] = "1"
 from collections import defaultdict
 import copy
 import gym
@@ -9,6 +7,7 @@ from modeling.distributions import Moments
 from modeling.autoencoder.base import Autoencoder
 import numpy as np
 from omegaconf import DictConfig
+import os
 import torch
 import torch.distributions as D
 import torch.nn.functional as F
@@ -17,7 +16,7 @@ from typing import Any, Dict, List, Tuple
 from utils.instantiate import instantiate_trainer
 from utils.module import FreezeParameters
 from utils.training import set_seed, print_summary, OnlineModule
-from utils.visualizations import  visualize_reward_prediction, visualize_output_attention, visualize_reward_predictor_attention, get_attention_weights
+from utils.visualizations import visualize_reward_prediction, visualize_output_attention, visualize_reward_predictor_attention, get_attention_weights
 
 
 class SOLDModule(OnlineModule):
@@ -351,4 +350,5 @@ def train(cfg: DictConfig):
 
 
 if __name__ == "__main__":
+    os.environ["HYDRA_FULL_ERROR"] = "1"
     train()

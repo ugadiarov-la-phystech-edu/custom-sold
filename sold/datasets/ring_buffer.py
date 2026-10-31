@@ -1,14 +1,16 @@
 from abc import ABC, abstractmethod
 from collections import defaultdict, deque
+import logging
 import numpy as np
 import os
 import shutil
 from datasets.info import EpisodeDatasetInfo, EpisodeDatasetInfoMixin, Fields
-from termcolor import colored
 from tqdm import tqdm
 import torch
 from typing import Any, Dict, List, Optional
 import warnings
+
+logger = logging.getLogger(__name__)
 
 
 class EpisodeDataset(EpisodeDatasetInfoMixin, ABC):
@@ -196,8 +198,7 @@ class RingBufferDataset(EpisodeDataset):
             self.ring_buffer[key] = np.memmap(filename, dtype=dtype, mode=mode, shape=(self.capacity, *value.shape))
 
         total_bytes = bytes_per_step * self.capacity
-        print(colored(f'{"Total estimated replay buffer size (GB)" + ":":<15}', attrs=["bold"]),
-              f"{total_bytes/1e9:.2f}")
+        logger.info("Total estimated replay buffer size (GB): %.2f", total_bytes / 1e9)
 
     def load_from_disk_storage(self, load_path: str, capacity: int, info: EpisodeDatasetInfo, head: int, tail: int,
                                episode_boundaries: deque) -> None:

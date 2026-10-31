@@ -1,6 +1,7 @@
 """envs: wrappers, make_env for every suite, multi_object_fetch distractor sampling, dm_control adapters."""
 
 import importlib
+import os
 import sys
 
 import numpy as np
@@ -15,8 +16,9 @@ from envs.wrappers.to_tensor import ToTensor
 from tests import fakes
 
 
-def test_importing_envs_selects_egl():
-    import os
+def test_make_env_selects_egl(monkeypatch):
+    monkeypatch.delenv("MUJOCO_GL", raising=False)
+    fakes.make_fake_env()
     assert os.environ["MUJOCO_GL"] == "egl"
 
 

@@ -1,5 +1,4 @@
 import os
-os.environ['MUJOCO_GL'] = 'egl'  # Set MuJoCo rendering backend.
 from envs.from_gym import make_env as make_gym_env
 from envs.wrappers.to_tensor import ToTensor
 import gym
@@ -8,6 +7,7 @@ from typing import Optional, Tuple
 
 def make_env(suite: str, name: str, image_size: Tuple[int, int], max_episode_steps: int, action_repeat: int,
              seed: Optional[int] = None) -> gym.Env:
+    os.environ['MUJOCO_GL'] = 'egl'  # MuJoCo rendering backend; set before importing a MuJoCo suite.
     if suite == 'gym':
         env = make_gym_env(name, image_size, max_episode_steps, action_repeat, seed)
     elif suite == 'mof':

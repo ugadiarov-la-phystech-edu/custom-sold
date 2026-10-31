@@ -3,6 +3,8 @@
 import ast
 import functools
 import os
+import subprocess
+import sys
 
 import numpy as np
 import pytest
@@ -13,7 +15,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 import evaluate_sold
 import generate_dataset
-from tests.conftest import CONFIGS_DIR, SOLD_DIR, make_tiny_savi, make_tiny_sold
+from tests.conftest import CONFIGS_DIR, REPO_DIR, SOLD_DIR, make_tiny_savi, make_tiny_sold
 from train_autoencoder import AutoencoderModule, load_autoencoder
 
 
@@ -194,3 +196,20 @@ def test_all_scripts_use_the_same_hydra_version_base():
                 keywords = {k.arg: ast.literal_eval(k.value) for k in node.keywords}
                 version_bases[script] = keywords.get("version_base", "<not set>")
     assert len(set(version_bases.values())) == 1, version_bases
+
+
+def test_importing_the_code_leaves_the_process_state_alone():
+    """Importing modules must not change environment variables or warning filters; entry points do."""
+    probe = """
+import os, warnings
+import gym, hydra, lightning, matplotlib, torch, torchvision  # Third-party imports may have their own effects.
+environ, filters = dict(os.environ), list(warnings.filters)
+import envs, evaluate_sold, generate_dataset, train_autoencoder, train_sold  # noqa: F401
+assert dict(os.environ) == environ, set(os.environ.items()) ^ set(environ.items())
+assert list(warnings.filters) == filters, [f for f in warnings.filters if f not in filters]
+"""
+    environ = {k: v for k, v in os.environ.items() if k not in ("HYDRA_FULL_ERROR", "MUJOCO_GL")}
+    environ["PYTHONPATH"] = str(SOLD_DIR)  # The repository root is the working directory.
+    result = subprocess.run([sys.executable, "-c", probe], cwd=REPO_DIR, env=environ, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr[-2000:]
+

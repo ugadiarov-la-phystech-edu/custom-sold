@@ -11,8 +11,6 @@ from train_sold import SOLDModule
 from typing import Any, Dict, List
 from utils.training import set_seed
 
-os.environ["HYDRA_FULL_ERROR"] = "1"
-
 
 @torch.no_grad()
 def play_episode(sold: SOLDModule, mode: str = "eval") -> Dict[str, Any]:
@@ -81,4 +79,5 @@ def evaluate(cfg: DictConfig):
 
 
 if __name__ == "__main__":
+    os.environ["HYDRA_FULL_ERROR"] = "1"
     evaluate()

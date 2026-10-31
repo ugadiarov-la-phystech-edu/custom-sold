@@ -20,8 +20,6 @@ from typing import Any, Dict, Optional, Union
 from utils.logging import LoggingStepMixin
 import warnings
 
-warnings.filterwarnings("ignore", ".*Consider increasing the value of the `num_workers` argument*")
-
 
 def set_seed(seed: int) -> None:
     os.environ['PYTHONHASHSEED'] = str(seed)
@@ -137,6 +135,8 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
             self.replay_buffer = RingBufferDataset(self.buffer_capacity, self.batch_size, self.sequence_length,
                                                   save_path=self.logger.log_dir + "/replay_buffer")
         dataset = NumUpdatesWrapper(self.replay_buffer, self.num_updates)
+        # The replay buffer is sampled in a single worker process on purpose.
+        warnings.filterwarnings("ignore", ".*Consider increasing the value of the `num_workers` argument*")
         dataloader = DataLoader(dataset, batch_size=1, pin_memory=True, num_workers=1)
         return dataloader
 

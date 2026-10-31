@@ -1,10 +1,9 @@
-import os
-os.environ["HYDRA_FULL_ERROR"] = "1"
 import hydra
 from lightning import LightningModule
 from lightning.pytorch.utilities.types import Optimizer, OptimizerLRScheduler, STEP_OUTPUT
 from modeling.autoencoder.base import Autoencoder
 from omegaconf import DictConfig
+import os
 from termcolor import colored
 import torch
 import torch.nn.functional as F
@@ -77,4 +76,5 @@ def train(cfg: DictConfig):
 
 
 if __name__ == "__main__":
+    os.environ["HYDRA_FULL_ERROR"] = "1"
     train()
