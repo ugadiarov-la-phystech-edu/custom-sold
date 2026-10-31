@@ -1,25 +1,24 @@
 #!/usr/bin/env bash
 #
-# Run the test suite (or all checks) on a remote GPU machine without touching its working copy.
-#
-# Copies the tracked and untracked (non-ignored) files of this clone, except checkpoints/ and paper/, to a scratch
-# directory on the remote machine, links the remote repository's checkpoints/ into it (the golden tests need the real
-# LFS files), and runs pytest (or scripts/check.sh) there at low priority so running trainings are not slowed down.
+# Run the tests (or all checks) on a remote GPU machine without touching its working copy: copy this clone's tracked
+# and untracked files (except checkpoints/ and paper/) to a scratch directory, link the remote clone's checkpoints/
+# (real LFS files for the golden tests) and run pytest or scripts/check.sh there at low priority.
 #
 # Usage:
 #   scripts/remote_test.sh [PYTEST_ARGS...]           e.g. scripts/remote_test.sh -q --cov
-#   scripts/remote_test.sh --check [PYTEST_ARGS...]   all checks (scripts/check.sh): lint, format, types, tests
+#   scripts/remote_test.sh --check [PYTEST_ARGS...]   all checks (scripts/check.sh)
 #
-# Settings come from the environment or from scripts/remote_test.env (gitignored), for example:
+# Settings come from the environment or scripts/remote_test.env (gitignored), e.g.:
 #   REMOTE_HOST=user@gpu-host           # required
 #   REMOTE_PORT=2222                    # default 22
-#   REMOTE_KEY=/path/to/private_key     # optional, as seen from the jump host (or locally without a jump host)
-#   REMOTE_JUMP=user@jump-host          # optional: run the ssh to REMOTE_HOST from this host
+#   REMOTE_KEY=/path/to/private_key     # optional; a path on the jump host if REMOTE_JUMP is set
+#   REMOTE_JUMP=user@jump-host          # optional jump host
 #   REMOTE_REPO=/path/to/custom-sold    # remote clone whose checkpoints/ is linked
 #   REMOTE_DIR=/tmp/sold-test           # scratch directory, recreated on every run
 #   REMOTE_CONDA_SH=/path/to/conda.sh   # sourced before activating REMOTE_CONDA_ENV
 #   REMOTE_CONDA_ENV=mof-text
-#   REMOTE_THREADS=4                    # OMP/MKL threads for the tests
+#   REMOTE_THREADS=4                    # OMP/MKL threads
+#   SOLD_RUN_CHECKPOINTS=/remote/folder # optional, for tests/golden/test_run_checkpoints.py
 
 set -euo pipefail
 
@@ -73,5 +72,6 @@ conda activate $REMOTE_CONDA_ENV
 cd $REMOTE_DIR
 export OMP_NUM_THREADS=$REMOTE_THREADS MKL_NUM_THREADS=$REMOTE_THREADS PYTEST_ADDOPTS="-p no:cacheprovider"
 export MYPY_CACHE_DIR=$REMOTE_DIR.mypy_cache  # Survives the scratch directory's recreation.
+${SOLD_RUN_CHECKPOINTS:+export SOLD_RUN_CHECKPOINTS=$SOLD_RUN_CHECKPOINTS}
 nice -n 10 $command $pytest_args
 EOF

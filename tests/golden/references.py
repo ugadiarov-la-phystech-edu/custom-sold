@@ -15,8 +15,14 @@ so it fails to load when a refactor changes either without a compatibility shim.
 
 Never regenerate it: a checkpoint written by newer code would no longer test old checkpoints. Its reference outputs
 are regenerated with the others.
+
+test_run_checkpoints.py checks checkpoints of real training runs, which are not in the repository, against references
+written next to them before a refactor:
+
+    PYTHONPATH=sold:. python -m tests.golden.references --run-checkpoints FOLDER
 """
 
+import numpy as np
 from pathlib import Path
 import sys
 import tempfile
@@ -57,6 +63,7 @@ def _sold_env(image_size, action_dim, max_episode_steps):
     env.unwrapped.action_space = env.action_space = type(env.action_space)(
         -1.0, 1.0, (action_dim,), env.action_space.dtype
     )
+    env.unwrapped.position = np.zeros(action_dim, np.float32)  # The point mass moves in the action's dimensions.
     return env
 
 
@@ -91,6 +98,11 @@ def _sold_model_outputs(sold, images, num_context):
 
 
 def sold_outputs(checkpoint_path):
+    return _sold_model_outputs(load_sold(checkpoint_path), _images(1, length=5), num_context=3)
+
+
+def run_checkpoint_outputs(checkpoint_path):
+    """Outputs of a real PushRed/PickRed run's SOLD checkpoint (64x64 images, 4-D actions)."""
     return _sold_model_outputs(load_sold(checkpoint_path), _images(1, length=5), num_context=3)
 
 
@@ -168,6 +180,13 @@ def generate_legacy_checkpoint():
 
 
 if __name__ == "__main__":
+    if "--run-checkpoints" in sys.argv:
+        # References for test_run_checkpoints.py: <name>.pt next to each <name>.ckpt in the folder.
+        folder = Path(sys.argv[sys.argv.index("--run-checkpoints") + 1])
+        for checkpoint in sorted(folder.glob("*.ckpt")):
+            torch.save(run_checkpoint_outputs(checkpoint), checkpoint.with_suffix(".pt"))
+            print(f"wrote {checkpoint.with_suffix('.pt')}")
+        sys.exit(0)
     if "--legacy-checkpoint" in sys.argv:
         generate_legacy_checkpoint()
     DATA_DIR.mkdir(exist_ok=True)
