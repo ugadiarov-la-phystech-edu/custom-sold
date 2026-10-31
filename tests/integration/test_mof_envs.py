@@ -9,8 +9,10 @@ from envs.from_mof import VariableDistractorsWrapper
 pytestmark = pytest.mark.mujoco
 
 
-@pytest.mark.parametrize("name", ["ReachRed_0to4Distractors_Dense-v1", "PushRed_0to4Distractors_Dense-v1",
-                                  "PickRed_0to4Distractors_Dense-v1"])
+@pytest.mark.parametrize(
+    "name",
+    ["ReachRed_0to4Distractors_Dense-v1", "PushRed_0to4Distractors_Dense-v1", "PickRed_0to4Distractors_Dense-v1"],
+)
 def test_mof_environment_through_sold_wrappers(name):
     env = envs.make_env("mof", name, (64, 64), max_episode_steps=50, action_repeat=2)
     assert isinstance(env.env, VariableDistractorsWrapper)
@@ -34,7 +36,9 @@ def test_episode_lengths_per_task():
     assert lengths == {"ReachRed": 25, "PushRed": 50}
 
 
-@pytest.mark.xfail(strict=True, reason="BUGS_AND_PITFALLS.md #9: Reach episodes end after 25 steps (gym's own time limit)")
+@pytest.mark.xfail(
+    strict=True, reason="BUGS_AND_PITFALLS.md #9: Reach episodes end after 25 steps (gym's own time limit)"
+)
 def test_reach_episodes_last_max_episode_steps():
     env = envs.make_env("mof", "ReachRed_0to0Distractors_Dense-v1", (64, 64), max_episode_steps=50, action_repeat=2)
     env.reset()
@@ -47,6 +51,7 @@ def test_reach_episodes_last_max_episode_steps():
 
 # BUGS_AND_PITFALLS.md #11 (fixed).
 def test_the_seed_makes_environments_reproducible():
-    first = [envs.make_env("mof", "PushRed_2to2Distractors_Dense-v1", (64, 64), 50, 2, seed=3).reset()
-             for _ in range(2)]
+    first = [
+        envs.make_env("mof", "PushRed_2to2Distractors_Dense-v1", (64, 64), 50, 2, seed=3).reset() for _ in range(2)
+    ]
     assert torch.equal(first[0], first[1])

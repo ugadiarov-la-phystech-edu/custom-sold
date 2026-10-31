@@ -51,8 +51,9 @@ def test_ema_update():
 # ------------------------------------------------------------------------------------- losses
 def test_actor_loss_normalizes_returns_and_values():
     returns, values = torch.tensor([[5.0, 3.0, 0.0]]), torch.tensor([[1.0, 1.0, 0.0]])
-    losses = actor_loss(returns, values, torch.zeros(1, 3), torch.zeros(1, 3), torch.ones(1, 3), 1.0, 2.0,
-                        "dynamics", 0.0)
+    losses = actor_loss(
+        returns, values, torch.zeros(1, 3), torch.zeros(1, 3), torch.ones(1, 3), 1.0, 2.0, "dynamics", 0.0
+    )
     assert torch.isclose(losses["actor_return_loss"], torch.tensor(-((5.0 - 1.0) / 2 + (3.0 - 1.0) / 2) / 2))
 
 
@@ -73,8 +74,9 @@ def test_actor_loss_dynamics_gradients_by_hand():
 def test_actor_loss_reinforce_gradients_go_through_log_probs_only():
     returns = torch.tensor([[3.0, 2.0, 1.0]], requires_grad=True)
     log_probs = torch.tensor([[-1.0, -2.0, -3.0]], requires_grad=True)
-    losses = actor_loss(returns, torch.zeros(1, 3), log_probs, torch.zeros(1, 3), torch.ones(1, 3), *NO_NORMALIZATION,
-                        "reinforce", 0.0)
+    losses = actor_loss(
+        returns, torch.zeros(1, 3), log_probs, torch.zeros(1, 3), torch.ones(1, 3), *NO_NORMALIZATION, "reinforce", 0.0
+    )
     assert torch.isclose(losses["actor_return_loss"], torch.tensor((-1.0 * 3.0 - 2.0 * 2.0) / 2))
     losses["actor_loss"].backward()
     assert log_probs.grad is not None and returns.grad is None
@@ -82,8 +84,16 @@ def test_actor_loss_reinforce_gradients_go_through_log_probs_only():
 
 def test_actor_loss_rejects_unknown_gradients():
     with pytest.raises(ValueError, match="Invalid actor_gradients: magic"):
-        actor_loss(torch.zeros(1, 3), torch.zeros(1, 3), torch.zeros(1, 3), torch.zeros(1, 3), torch.ones(1, 3),
-                   *NO_NORMALIZATION, "magic", 0.0)
+        actor_loss(
+            torch.zeros(1, 3),
+            torch.zeros(1, 3),
+            torch.zeros(1, 3),
+            torch.zeros(1, 3),
+            torch.ones(1, 3),
+            *NO_NORMALIZATION,
+            "magic",
+            0.0,
+        )
 
 
 def test_critic_loss():
@@ -97,4 +107,3 @@ def test_critic_loss():
     assert torch.allclose(losses["critic_loss"], expected_return + 0.5 * expected_regularization)
     assert torch.allclose(losses["return_mse_loss"], torch.mean((dist.mean.squeeze(2) - returns) ** 2))
     assert not losses["return_mse_loss"].requires_grad
-

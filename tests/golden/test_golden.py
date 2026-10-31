@@ -14,8 +14,9 @@ def _assert_matches(name, actual):
     assert set(actual) == set(expected)
     for key in expected:
         assert actual[key].shape == expected[key].shape, key
-        assert torch.allclose(actual[key], expected[key], **TOLERANCE), \
+        assert torch.allclose(actual[key], expected[key], **TOLERANCE), (
             f"{name}/{key}: max abs diff {(actual[key] - expected[key]).abs().max().item():.3g}"
+        )
 
 
 @pytest.mark.parametrize("name", sorted(references.SAVI_CHECKPOINTS))

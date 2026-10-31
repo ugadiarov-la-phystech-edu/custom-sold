@@ -8,8 +8,14 @@ from utils.visualizations import make_row, stack_rows, create_segmentation_overl
 
 
 class SAVi(Autoencoder):
-    def __init__(self, corrector: Corrector, predictor: Predictor, encoder: SaviCnnEncoder, decoder: SaviCnnDecoder,
-                 initializer: SlotInitializer) -> None:
+    def __init__(
+        self,
+        corrector: Corrector,
+        predictor: Predictor,
+        encoder: SaviCnnEncoder,
+        decoder: SaviCnnDecoder,
+        initializer: SlotInitializer,
+    ) -> None:
         super().__init__()
         self.corrector = corrector
         self.predictor = predictor
@@ -37,11 +43,15 @@ class SAVi(Autoencoder):
     def slot_dim(self) -> int:
         return self.corrector.slot_dim
 
-    def encode(self, images: torch.Tensor, actions: torch.Tensor, prior_slots: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def encode(
+        self, images: torch.Tensor, actions: torch.Tensor, prior_slots: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         slots_sequence = []
         batch_size, sequence_length, _, _, _ = images.size()
 
-        predicted_slots = self.initializer(batch_size) if prior_slots is None else self.predictor(prior_slots, actions[:, 0])
+        predicted_slots = (
+            self.initializer(batch_size) if prior_slots is None else self.predictor(prior_slots, actions[:, 0])
+        )
         for time_step in range(sequence_length):
             features = self.encoder(images[:, time_step])
             slots = self.corrector(features, slots=predicted_slots, is_first=prior_slots is None and time_step == 0)
@@ -59,10 +69,14 @@ class SAVi(Autoencoder):
         masks = masks.view(batch_size, sequence_length, num_slots, 1, *self.decoder.image_size)
         return {"reconstructions": torch.sum(rgbs * masks, dim=2).clamp(0, 1), "rgbs": rgbs, "masks": masks}
 
-    def forward(self, images: torch.Tensor, actions: torch.Tensor, prior_slots: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
+    def forward(
+        self, images: torch.Tensor, actions: torch.Tensor, prior_slots: Optional[torch.Tensor] = None
+    ) -> Dict[str, torch.Tensor]:
         batch_size, sequence_length, num_channels, height, width = images.size()
         outputs = super().forward(images, actions, prior_slots)
-        outputs["rgbs"] = outputs["rgbs"].reshape(batch_size, sequence_length, self.num_slots, num_channels, height, width)
+        outputs["rgbs"] = outputs["rgbs"].reshape(
+            batch_size, sequence_length, self.num_slots, num_channels, height, width
+        )
         outputs["masks"] = outputs["masks"].reshape(batch_size, sequence_length, self.num_slots, 1, height, width)
         return outputs
 
@@ -74,11 +88,12 @@ class SAVi(Autoencoder):
             rows.append(make_row(outputs["images"].cpu()))
         rows.append(make_row(outputs["reconstructions"].cpu()))
         images = outputs["images"].cpu() if "images" in outputs else torch.zeros_like(outputs["reconstructions"].cpu())
-        rows.append(make_row(create_segmentation_overlay(images, outputs["masks"].cpu(),
-                                                         background_brightness=0.0)))
+        rows.append(make_row(create_segmentation_overlay(images, outputs["masks"].cpu(), background_brightness=0.0)))
         individual_slots = outputs["masks"].cpu() * outputs["rgbs"].cpu()
-        rows.extend(make_row(individual_slots[:, slot_index], pad_color=slot_color(slot_index, num_slots))
-                    for slot_index in range(num_slots))
+        rows.extend(
+            make_row(individual_slots[:, slot_index], pad_color=slot_color(slot_index, num_slots))
+            for slot_index in range(num_slots)
+        )
 
         if "xticks" in outputs:
             label_backgrounds = torch.ones(sequence_length, 3, height // 3, width)

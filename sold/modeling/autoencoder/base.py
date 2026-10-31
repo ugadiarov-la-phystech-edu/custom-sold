@@ -19,8 +19,9 @@ class Autoencoder(ABC, nn.Module):
         pass
 
     @abstractmethod
-    def encode(self, images: torch.Tensor, actions: torch.Tensor,
-               prior_slots: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def encode(
+        self, images: torch.Tensor, actions: torch.Tensor, prior_slots: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         """Encode images into slots.
         Args:
             images (torch.Tensor): Image sequence of shape (batch_size, sequence_length, 3, height, width).
@@ -45,7 +46,9 @@ class Autoencoder(ABC, nn.Module):
         """
         pass
 
-    def forward(self, images: torch.Tensor, actions: torch.Tensor, prior_slots: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
+    def forward(
+        self, images: torch.Tensor, actions: torch.Tensor, prior_slots: Optional[torch.Tensor] = None
+    ) -> Dict[str, torch.Tensor]:
         batch_size, sequence_length, num_channels, height, width = images.size()
         slots = self.encode(images, actions, prior_slots)
         outputs = self.decode(slots)

@@ -50,7 +50,7 @@ def test_forward_rejects_a_mask_of_the_wrong_size():
 @pytest.mark.parametrize("num_heads", [1, 2, 4, 8])
 def test_alibi_slopes_power_of_two(num_heads):
     slopes = AlibiMask(2, num_heads, 1).get_slopes(num_heads)
-    start = 2 ** (-2 ** -(math.log2(num_heads) - 2))
+    start = 2 ** (-(2 ** -(math.log2(num_heads) - 2)))
     assert slopes == pytest.approx([start ** (i + 1) for i in range(num_heads)])
 
 

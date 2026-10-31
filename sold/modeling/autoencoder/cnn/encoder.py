@@ -6,13 +6,16 @@ from typing import List
 
 
 class CnnEncoder(nn.Module):
-    def __init__(self, num_channels: List[int], kernel_sizes: List[int], strides: List[int], in_channels: int = 3
-                 ) -> None:
+    def __init__(
+        self, num_channels: List[int], kernel_sizes: List[int], strides: List[int], in_channels: int = 3
+    ) -> None:
         super().__init__()
         self.in_channels = in_channels
         if not (len(num_channels) == len(kernel_sizes) == len(strides)):
-            raise ValueError(f"Expected num_channels, kernel_sizes, and strides to have the same length, but got "
-                             f"{len(num_channels)}, {len(kernel_sizes)}, {len(strides)}.")
+            raise ValueError(
+                f"Expected num_channels, kernel_sizes, and strides to have the same length, but got "
+                f"{len(num_channels)}, {len(kernel_sizes)}, {len(strides)}."
+            )
 
         layers = []
         for layer_num, (out_channels, kernel_size, stride) in enumerate(zip(num_channels, kernel_sizes, strides)):
@@ -31,6 +34,7 @@ class CnnEncoder(nn.Module):
 
 class SamePadConv2d(torch.nn.Conv2d):
     """Apply same padding so that out_size = in_size / stride."""
+
     @staticmethod
     def get_same_padding(size: int, kernel_size: int, stride: int, dilation: int) -> int:
         return max((math.ceil(size / stride) - 1) * stride + (kernel_size - 1) * dilation + 1 - size, 0)
@@ -42,6 +46,12 @@ class SamePadConv2d(torch.nn.Conv2d):
 
         if height_padding > 0 or width_padding > 0:
             image = F.pad(
-                image, [width_padding // 2, width_padding - width_padding // 2, height_padding // 2, height_padding - height_padding // 2]
+                image,
+                [
+                    width_padding // 2,
+                    width_padding - width_padding // 2,
+                    height_padding // 2,
+                    height_padding - height_padding // 2,
+                ],
             )
         return F.conv2d(image, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)

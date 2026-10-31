@@ -3,8 +3,16 @@ import torch.nn as nn
 
 
 class Corrector(nn.Module):
-    def __init__(self, num_slots: int, slot_dim: int, feature_dim: int, num_iterations: int,
-                 num_initial_iterations: int, hidden_dim: int = 128, epsilon: float = 1e-8) -> None:
+    def __init__(
+        self,
+        num_slots: int,
+        slot_dim: int,
+        feature_dim: int,
+        num_iterations: int,
+        num_initial_iterations: int,
+        hidden_dim: int = 128,
+        epsilon: float = 1e-8,
+    ) -> None:
         super().__init__()
         self.num_slots = num_slots
         self.slot_dim = slot_dim
@@ -13,7 +21,7 @@ class Corrector(nn.Module):
         self.num_initial_iterations = num_initial_iterations
         self.hidden_dim = hidden_dim
         self.epsilon = epsilon
-        self.scale = feature_dim ** -0.5
+        self.scale = feature_dim**-0.5
 
         # Normalization layers.
         self.norm_input = nn.LayerNorm(feature_dim, eps=0.001)
@@ -57,15 +65,12 @@ class Corrector(nn.Module):
             slots = self.norm_slot(slots)
             q = self.to_q(slots)  # (batch_size, num_slots, slot_dim)
 
-            dots = torch.einsum('b i d , b j d -> b i j', q, k) * self.scale  # (batch_size, num_slots, num_locs)
+            dots = torch.einsum("b i d , b j d -> b i j", q, k) * self.scale  # (batch_size, num_slots, num_locs)
             attn = dots.softmax(dim=1) + self.epsilon  # Enforce competition between slots.
             attn = attn / attn.sum(dim=-1, keepdim=True)  # (batch_size, num_slots, num_locs)
             self.attention_masks = attn
-            updates = torch.einsum('b i d , b d j -> b i j', attn, v)  # (batch_size, num_slots, slot_dim)
-            slots = self.gru(
-                updates.reshape(-1, self.slot_dim),
-                slots_prev.reshape(-1, self.slot_dim)
-            )
+            updates = torch.einsum("b i d , b d j -> b i j", attn, v)  # (batch_size, num_slots, slot_dim)
+            slots = self.gru(updates.reshape(-1, self.slot_dim), slots_prev.reshape(-1, self.slot_dim))
             slots = slots.reshape(batch_size, -1, self.slot_dim)
             slots = slots + self.mlp(self.norm_mlp(slots))
         return slots

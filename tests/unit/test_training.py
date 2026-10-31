@@ -38,7 +38,9 @@ def test_set_seed_is_reproducible(monkeypatch):
 def test_print_summary(monkeypatch, capsys):
     hydra_config = SimpleNamespace(runtime=SimpleNamespace(output_dir="/out/dir"))
     monkeypatch.setattr(training.hydra.core.hydra_config.HydraConfig, "get", staticmethod(lambda: hydra_config))
-    cfg = SimpleNamespace(model=SimpleNamespace(env=SimpleNamespace(name="PushRed"), max_steps=1234567), experiment="exp")
+    cfg = SimpleNamespace(
+        model=SimpleNamespace(env=SimpleNamespace(name="PushRed"), max_steps=1234567), experiment="exp"
+    )
     print_summary(cfg)
     out = capsys.readouterr().out
     for text in ["Output Dir:", "/out/dir", "Task:", "PushRed", "Max steps:", "1,234,567", "Experiment:", "exp"]:
@@ -142,12 +144,20 @@ def test_on_load_checkpoint_without_replay_buffer(tiny_sold, tmp_path):
 
 def test_on_load_checkpoint_rejects_buffer_without_fields(tiny_sold, tmp_path):
     from datasets.info import EpisodeDatasetInfo
+
     tiny_sold._trainer = mock.Mock()
-    with mock.patch.object(type(tiny_sold), "logger", new_callable=mock.PropertyMock,
-                           return_value=SimpleNamespace(log_dir=str(tmp_path))):
+    with mock.patch.object(
+        type(tiny_sold), "logger", new_callable=mock.PropertyMock, return_value=SimpleNamespace(log_dir=str(tmp_path))
+    ):
         with pytest.raises(ValueError, match="without fields"):
-            tiny_sold.on_load_checkpoint({"num_steps": 5, "num_episodes": 1, "replay_buffer_path": tmp_path,
-                                          "replay_buffer_info": EpisodeDatasetInfo()})
+            tiny_sold.on_load_checkpoint(
+                {
+                    "num_steps": 5,
+                    "num_episodes": 1,
+                    "replay_buffer_path": tmp_path,
+                    "replay_buffer_info": EpisodeDatasetInfo(),
+                }
+            )
 
 
 def _fit(tmp_path, save_replay_buffer=True, **overrides):
@@ -200,13 +210,27 @@ def test_fit_logs_metrics(fitted):
     _, _, log_dir = fitted
     records = [json.loads(line) for line in open(log_dir / "metrics" / "metrics.jsonl")]
     keys = set().union(*records)
-    assert {"eval/episode_return", "eval/success_rate", "train/episode_return", "train/buffer_size",
-            "train/dynamics_loss", "train/reward_loss", "train/actor_loss", "train/critic_loss",
-            "gradients/actor"} <= keys
+    assert {
+        "eval/episode_return",
+        "eval/success_rate",
+        "train/episode_return",
+        "train/buffer_size",
+        "train/dynamics_loss",
+        "train/reward_loss",
+        "train/actor_loss",
+        "train/critic_loss",
+        "gradients/actor",
+    } <= keys
     assert [r["step"] for r in records] == sorted(r["step"] for r in records)
     images = os.listdir(log_dir / "images")
-    for name in ["autoencoder_reconstruction", "dynamics_prediction", "reward_prediction",
-                 "reward_predictor_attention", "latent_imagination", "actor_attention"]:
+    for name in [
+        "autoencoder_reconstruction",
+        "dynamics_prediction",
+        "reward_prediction",
+        "reward_predictor_attention",
+        "latent_imagination",
+        "actor_attention",
+    ]:
         assert any(image.startswith(name + "-step=") for image in images), name
 
 
@@ -217,8 +241,14 @@ def test_fit_progress_bar_is_created(fitted):
 
 
 def test_fit_without_saving_replay_buffer_and_with_finetuning(tmp_path):
-    sold, trainer = _fit(tmp_path, save_replay_buffer=False, finetune_autoencoder=True, max_steps=20,
-                         start_imagination_from_every=True, num_context=(1, 2))
+    sold, trainer = _fit(
+        tmp_path,
+        save_replay_buffer=False,
+        finetune_autoencoder=True,
+        max_steps=20,
+        start_imagination_from_every=True,
+        num_context=(1, 2),
+    )
     assert sold.num_steps == 20
     assert not list(Path(trainer.logger.log_dir, "checkpoints").glob("replay_buffer-*"))
     checkpoint = torch.load(next(Path(trainer.logger.log_dir, "checkpoints").glob("*.ckpt")), weights_only=False)
@@ -227,10 +257,10 @@ def test_fit_without_saving_replay_buffer_and_with_finetuning(tmp_path):
 
 def test_save_replay_buffer_when_buffer_folder_is_missing(tiny_sold, tmp_path):
     tiny_sold.save_replay_buffer = True
-    tiny_sold.replay_buffer = SimpleNamespace(save_path=str(tmp_path / "missing"), capacity=1, info=None, head=0,
-                                              tail=0, episode_boundaries=[])
-    with mock.patch.object(type(tiny_sold), "checkpoints_dir", new_callable=mock.PropertyMock,
-                           return_value=tmp_path):
+    tiny_sold.replay_buffer = SimpleNamespace(
+        save_path=str(tmp_path / "missing"), capacity=1, info=None, head=0, tail=0, episode_boundaries=[]
+    )
+    with mock.patch.object(type(tiny_sold), "checkpoints_dir", new_callable=mock.PropertyMock, return_value=tmp_path):
         checkpoint = {}
         tiny_sold.on_save_checkpoint(checkpoint)
     assert checkpoint["replay_buffer_path"] == tmp_path / "replay_buffer-steps=0-episode=-1"
@@ -238,8 +268,9 @@ def test_save_replay_buffer_when_buffer_folder_is_missing(tiny_sold, tmp_path):
 
 
 def test_checkpoints_dir_is_created_under_log_dir(tiny_sold, tmp_path):
-    with mock.patch.object(type(tiny_sold), "logger", new_callable=mock.PropertyMock,
-                           return_value=SimpleNamespace(log_dir=str(tmp_path))):
+    with mock.patch.object(
+        type(tiny_sold), "logger", new_callable=mock.PropertyMock, return_value=SimpleNamespace(log_dir=str(tmp_path))
+    ):
         assert tiny_sold.checkpoints_dir == tmp_path / "checkpoints" and (tmp_path / "checkpoints").is_dir()
 
 
@@ -254,10 +285,12 @@ def test_save_replay_buffer_replaces_the_previous_copy(tiny_sold, tmp_path):
     old = tmp_path / "checkpoints" / "replay_buffer-steps=5-episode=1"
     old.mkdir(parents=True)
     tiny_sold.save_replay_buffer, tiny_sold.num_steps, tiny_sold.num_episodes = True, 7, 2
-    tiny_sold.replay_buffer = SimpleNamespace(save_path=str(live), capacity=1, info=None, head=0, tail=0,
-                                              episode_boundaries=[])
-    with mock.patch.object(type(tiny_sold), "checkpoints_dir", new_callable=mock.PropertyMock,
-                           return_value=tmp_path / "checkpoints"):
+    tiny_sold.replay_buffer = SimpleNamespace(
+        save_path=str(live), capacity=1, info=None, head=0, tail=0, episode_boundaries=[]
+    )
+    with mock.patch.object(
+        type(tiny_sold), "checkpoints_dir", new_callable=mock.PropertyMock, return_value=tmp_path / "checkpoints"
+    ):
         tiny_sold.on_save_checkpoint({})
     assert [p.name for p in (tmp_path / "checkpoints").iterdir()] == ["replay_buffer-steps=7-episode=2"]
     assert (tmp_path / "checkpoints" / "replay_buffer-steps=7-episode=2" / "obs.dat").read_bytes() == b"new"
@@ -272,6 +305,7 @@ def test_on_load_checkpoint_without_trainer_ignores_the_replay_buffer(tiny_sold,
 # BUGS_AND_PITFALLS.md #3a (fixed).
 def test_progress_bar_creates_its_display_on_train_start(tiny_sold):
     from lightning import Trainer
+
     bar = OnlineProgressBar()
     trainer = Trainer(accelerator="cpu", logger=False, callbacks=[bar], enable_model_summary=False)
     bar.setup(trainer, tiny_sold, stage="fit")
@@ -283,14 +317,26 @@ def test_progress_bar_creates_its_display_on_train_start(tiny_sold):
 # BUGS_AND_PITFALLS.md #4 (fixed).
 def test_resuming_restores_the_saved_replay_buffer(tiny_sold, tmp_path):
     from datasets.ring_buffer import RingBufferDataset
+
     saved = RingBufferDataset(20, 2, 3, save_path=str(tmp_path / "saved"))
     add_episode(saved, make_episode(5))
-    checkpoint = {"num_steps": 5, "num_episodes": 1, "replay_buffer_path": tmp_path / "saved",
-                  "replay_buffer_capacity": 20, "replay_buffer_info": saved.info, "replay_buffer_head": saved.head,
-                  "replay_buffer_tail": saved.tail, "replay_buffer_episode_boundaries": saved.episode_boundaries}
+    checkpoint = {
+        "num_steps": 5,
+        "num_episodes": 1,
+        "replay_buffer_path": tmp_path / "saved",
+        "replay_buffer_capacity": 20,
+        "replay_buffer_info": saved.info,
+        "replay_buffer_head": saved.head,
+        "replay_buffer_tail": saved.tail,
+        "replay_buffer_episode_boundaries": saved.episode_boundaries,
+    }
     tiny_sold._trainer = mock.Mock()  # Resuming happens inside trainer.fit (see #6 for the case without one).
-    with mock.patch.object(type(tiny_sold), "logger", new_callable=mock.PropertyMock,
-                           return_value=SimpleNamespace(log_dir=str(tmp_path / "run"))):
+    with mock.patch.object(
+        type(tiny_sold),
+        "logger",
+        new_callable=mock.PropertyMock,
+        return_value=SimpleNamespace(log_dir=str(tmp_path / "run")),
+    ):
         tiny_sold.on_load_checkpoint(checkpoint)
     assert tiny_sold.replay_buffer.num_episodes == 1 and tiny_sold.replay_buffer.tail == 5
     assert np.array_equal(tiny_sold.replay_buffer.ring_buffer["obs"], saved.ring_buffer["obs"])
@@ -304,11 +350,13 @@ def test_pruning_keeps_the_newest_replay_buffer(tiny_sold, tmp_path):
     live.mkdir()
     (live / "obs.dat").write_bytes(b"x")
     tiny_sold.save_replay_buffer, tiny_sold.num_steps, tiny_sold.num_episodes = True, 10500, 210
-    tiny_sold.replay_buffer = SimpleNamespace(save_path=str(live), capacity=1, info=None, head=0, tail=0,
-                                              episode_boundaries=[])
+    tiny_sold.replay_buffer = SimpleNamespace(
+        save_path=str(live), capacity=1, info=None, head=0, tail=0, episode_boundaries=[]
+    )
     checkpoint = {}
-    with mock.patch.object(type(tiny_sold), "checkpoints_dir", new_callable=mock.PropertyMock,
-                           return_value=checkpoints_dir):
+    with mock.patch.object(
+        type(tiny_sold), "checkpoints_dir", new_callable=mock.PropertyMock, return_value=checkpoints_dir
+    ):
         tiny_sold.on_save_checkpoint(checkpoint)
     assert [p.name for p in checkpoints_dir.iterdir()] == ["replay_buffer-steps=10500-episode=210"]
     assert checkpoint["replay_buffer_path"].exists()
@@ -317,6 +365,7 @@ def test_pruning_keeps_the_newest_replay_buffer(tiny_sold, tmp_path):
 # BUGS_AND_PITFALLS.md #6 (fixed).
 def test_latest_checkpoint_loads_without_a_trainer(fitted):
     from train_sold import SOLDModule
+
     _, _, log_dir = fitted
     checkpoints_dir = log_dir / "checkpoints"
     assert list(checkpoints_dir.glob("replay_buffer-*")), "precondition: the replay buffer copy exists"

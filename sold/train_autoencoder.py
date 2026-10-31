@@ -14,8 +14,12 @@ from utils.training import set_seed
 
 
 class AutoencoderModule(LoggingStepMixin, LightningModule):
-    def __init__(self, autoencoder: Autoencoder, optimizer: Callable[[Iterable], Optimizer],
-                 scheduler: Optional[DictConfig] = None) -> None:
+    def __init__(
+        self,
+        autoencoder: Autoencoder,
+        optimizer: Callable[[Iterable], Optimizer],
+        scheduler: Optional[DictConfig] = None,
+    ) -> None:
         super().__init__()
         self.autoencoder = autoencoder
         self._create_optimizer = optimizer
@@ -64,11 +68,16 @@ def train(cfg: DictConfig):
     fill_in_missing(cfg, dataset_infos)
     savi = hydra.utils.instantiate(cfg.model)
 
-    print(colored('Output dir:', 'magenta', attrs=['bold']), hydra.core.hydra_config.HydraConfig.get().runtime.output_dir)
+    print(
+        colored("Output dir:", "magenta", attrs=["bold"]), hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
+    )
     if cfg.logger.log_to_wandb:
         import wandb
+
         wandb.init(project="sold", name=cfg.experiment, config=dict(cfg), sync_tensorboard=True)
-    trainer.fit(savi, train_dataloader, val_dataloader, ckpt_path=os.path.abspath(cfg.checkpoint) if cfg.checkpoint else None)
+    trainer.fit(
+        savi, train_dataloader, val_dataloader, ckpt_path=os.path.abspath(cfg.checkpoint) if cfg.checkpoint else None
+    )
     if cfg.logger.log_to_wandb:
         wandb.finish()
 

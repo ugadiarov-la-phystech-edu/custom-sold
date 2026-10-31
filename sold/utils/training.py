@@ -22,7 +22,7 @@ import warnings
 
 
 def set_seed(seed: int) -> None:
-    os.environ['PYTHONHASHSEED'] = str(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -34,16 +34,14 @@ def print_summary(cfg):
     color, attrs = "magenta", ["bold"]
 
     def _pprint(k, v):
-        print(
-			colored(f'{k+":":<15}', color, attrs=attrs), v
-		)
+        print(colored(f"{k + ':':<15}", color, attrs=attrs), v)
 
     kvs = [
         ("Output Dir", hydra.core.hydra_config.HydraConfig.get().runtime.output_dir),
-		("Task", cfg.model.env.name),
-		("Max steps", f"{int(cfg.model.max_steps):,}"),
-		("Experiment", cfg.experiment),
-	]
+        ("Task", cfg.model.env.name),
+        ("Max steps", f"{int(cfg.model.max_steps):,}"),
+        ("Experiment", cfg.experiment),
+    ]
     for k, v in kvs:
         _pprint(k, v)
 
@@ -57,8 +55,9 @@ class OnlineProgressBar(RichProgressBar):
         self.pl_module = pl_module
         super().on_train_start(trainer, pl_module)
         if self.progress is not None:
-            self.train_progress_bar_id = self._add_task(self.total_train_batches,
-                                                        self._get_train_description(trainer.current_epoch))
+            self.train_progress_bar_id = self._add_task(
+                self.total_train_batches, self._get_train_description(trainer.current_epoch)
+            )
 
     def _get_train_description(self, current_epoch: int) -> str:
         train_description = f"Steps {self.pl_module.num_steps}, Episodes {max(self.pl_module.num_episodes, 0)}"
@@ -69,8 +68,12 @@ class OnlineProgressBar(RichProgressBar):
 
     def _update(self, progress_bar_id: Optional[TaskID], current: int, visible: bool = True) -> None:
         if self.progress is not None and self.is_enabled:
-            self.progress.update(self.train_progress_bar_id, completed=self.pl_module.num_steps, visible=visible,
-                                 description=self._get_train_description(self.trainer.current_epoch))
+            self.progress.update(
+                self.train_progress_bar_id,
+                completed=self.pl_module.num_steps,
+                visible=visible,
+                description=self._get_train_description(self.trainer.current_epoch),
+            )
             self.refresh()
 
     @property
@@ -79,9 +82,20 @@ class OnlineProgressBar(RichProgressBar):
 
 
 class OnlineModule(LoggingStepMixin, LightningModule, ABC):
-    def __init__(self, env: gym.Env, max_steps: int, num_seed: int, update_freq: int, num_updates: int,
-                 eval_freq: int, num_eval_episodes: int, batch_size: int, sequence_length: int, buffer_capacity: int,
-                 save_replay_buffer: bool) -> None:
+    def __init__(
+        self,
+        env: gym.Env,
+        max_steps: int,
+        num_seed: int,
+        update_freq: int,
+        num_updates: int,
+        eval_freq: int,
+        num_eval_episodes: int,
+        batch_size: int,
+        sequence_length: int,
+        buffer_capacity: int,
+        save_replay_buffer: bool,
+    ) -> None:
         """Integrates online experience collection with PyTorch Lightning's training loop.
 
         Args:
@@ -109,8 +123,9 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
         self.buffer_capacity = buffer_capacity
         self.save_replay_buffer = save_replay_buffer
 
-        self.last_action = torch.full_like(torch.from_numpy(self.env.action_space.sample().astype(np.float32)),
-                                           float('nan')).to(self.device)
+        self.last_action = torch.full_like(
+            torch.from_numpy(self.env.action_space.sample().astype(np.float32)), float("nan")
+        ).to(self.device)
         self.runner = EpisodeRunner(env, self._policy)
         self.num_steps = 0
         self.num_episodes = -1  # Start at -1 to account for the initial reset.
@@ -137,8 +152,12 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
 
     def train_dataloader(self) -> DataLoader:
         if not hasattr(self, "replay_buffer"):
-            self.replay_buffer = RingBufferDataset(self.buffer_capacity, self.batch_size, self.sequence_length,
-                                                  save_path=self.logger.log_dir + "/replay_buffer")
+            self.replay_buffer = RingBufferDataset(
+                self.buffer_capacity,
+                self.batch_size,
+                self.sequence_length,
+                save_path=self.logger.log_dir + "/replay_buffer",
+            )
         dataset = NumUpdatesWrapper(self.replay_buffer, self.num_updates)
         # The replay buffer is sampled in a single worker process on purpose.
         warnings.filterwarnings("ignore", ".*Consider increasing the value of the `num_workers` argument*")
@@ -178,10 +197,11 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
 
     def _complete_first_timestep(self, step_data: Dict[str, Any]) -> Dict[str, Any]:
         if "action" not in step_data:
-            step_data["action"] = torch.full_like(torch.from_numpy(self.env.action_space.sample().astype(np.float32)),
-                                                  float('nan'))
+            step_data["action"] = torch.full_like(
+                torch.from_numpy(self.env.action_space.sample().astype(np.float32)), float("nan")
+            )
         if "reward" not in step_data:
-            step_data["reward"] = torch.tensor(float('nan'))
+            step_data["reward"] = torch.tensor(float("nan"))
         return step_data
 
     @torch.no_grad()
@@ -202,8 +222,10 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
             self.log_video(f"train/episode_{episode_index}", torch.stack(episode["obs"]))
 
         # Save model checkpoint.
-        self.trainer.save_checkpoint(self.checkpoints_dir / f"sold-steps={self.num_steps}-episode={self.num_episodes}-"
-                                                            f"eval_episode_return={np.mean(episode_returns)}.ckpt")
+        self.trainer.save_checkpoint(
+            self.checkpoints_dir / f"sold-steps={self.num_steps}-episode={self.num_episodes}-"
+            f"eval_episode_return={np.mean(episode_returns)}.ckpt"
+        )
 
         self.eval_next = False
         self.after_eval = True
@@ -225,7 +247,9 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
 
         # Save the state of the replay buffer for the last checkpoint to enable checkpoint/restart (CPR) functionality.
         if self.save_replay_buffer:
-            replay_buffer_dir = self.checkpoints_dir / f"replay_buffer-steps={self.num_steps}-episode={self.num_episodes}"
+            replay_buffer_dir = (
+                self.checkpoints_dir / f"replay_buffer-steps={self.num_steps}-episode={self.num_episodes}"
+            )
             if Path(self.replay_buffer.save_path).resolve().exists():
                 shutil.copytree(Path(self.replay_buffer.save_path).resolve(), replay_buffer_dir)
             # Keep only the copy for this checkpoint (sorting the names as text would misorder 9000 and 10500).
@@ -251,8 +275,11 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
             self.train_dataloader()  # Initializes the replay buffer.
             if checkpoint["replay_buffer_info"].fields is None:
                 raise ValueError("Cannot load replay buffer without fields.")
-            self.replay_buffer.load_from_disk_storage(checkpoint["replay_buffer_path"],
-                                                      checkpoint["replay_buffer_capacity"],
-                                                      checkpoint["replay_buffer_info"], checkpoint["replay_buffer_head"],
-                                                      checkpoint["replay_buffer_tail"],
-                                                      checkpoint["replay_buffer_episode_boundaries"])
+            self.replay_buffer.load_from_disk_storage(
+                checkpoint["replay_buffer_path"],
+                checkpoint["replay_buffer_capacity"],
+                checkpoint["replay_buffer_info"],
+                checkpoint["replay_buffer_head"],
+                checkpoint["replay_buffer_tail"],
+                checkpoint["replay_buffer_episode_boundaries"],
+            )

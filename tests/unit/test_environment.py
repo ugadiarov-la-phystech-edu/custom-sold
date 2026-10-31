@@ -26,8 +26,24 @@ def test_03_pinned_versions():
     import pl_bolts.optimizers.lr_scheduler  # noqa: F401
 
 
-@pytest.mark.parametrize("module", ["torch", "torchvision", "lightning", "pl_bolts", "hydra", "omegaconf", "rich",
-                                    "termcolor", "matplotlib", "tensorboard", "av", "gym", "mujoco_py",
-                                    "multi_object_fetch"])
+@pytest.mark.parametrize(
+    "module",
+    [
+        "torch",
+        "torchvision",
+        "lightning",
+        "pl_bolts",
+        "hydra",
+        "omegaconf",
+        "rich",
+        "termcolor",
+        "matplotlib",
+        "tensorboard",
+        "av",
+        "gym",
+        "mujoco_py",
+        "multi_object_fetch",
+    ],
+)
 def test_required_packages_import(module):
     importlib.import_module(module)

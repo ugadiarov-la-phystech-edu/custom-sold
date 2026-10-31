@@ -7,7 +7,12 @@ import torch.distributions as D
 from modeling.attention_mask import AlibiMask, CausalMask
 from modeling.distributions import TwoHotEncodingDistribution
 from modeling.positional_encoding import LearnedEncoding, NoPositionalEncoding
-from modeling.sold.dynamics import AutoregressiveWrapper, OCVPSeqDynamicsModel, OCVPSeqLayer, make_ocvp_seq_dynamics_model
+from modeling.sold.dynamics import (
+    AutoregressiveWrapper,
+    OCVPSeqDynamicsModel,
+    OCVPSeqLayer,
+    make_ocvp_seq_dynamics_model,
+)
 from modeling.sold.prediction import GaussianPredictor, Predictor, RMSNorm, ScalarPredictor, TwoHotPredictor
 from modeling.sold.slot_aggregation_transformer import SlotAggregationTransformer, TransformerEncoderLayer
 
@@ -61,8 +66,18 @@ def test_autoregressive_wrapper_truncates_to_input_buffer_size():
 
 @pytest.mark.parametrize("residual", [True, False])
 def test_ocvp_dynamics_model_shapes(residual):
-    model = OCVPSeqDynamicsModel(num_slots=3, slot_dim=5, sequence_length=4, action_dim=2, token_dim=8, hidden_dim=16,
-                                 num_layers=2, num_heads=2, residual=residual, input_buffer_size=6).eval()
+    model = OCVPSeqDynamicsModel(
+        num_slots=3,
+        slot_dim=5,
+        sequence_length=4,
+        action_dim=2,
+        token_dim=8,
+        hidden_dim=16,
+        num_layers=2,
+        num_heads=2,
+        residual=residual,
+        input_buffer_size=6,
+    ).eval()
     slots, actions = torch.randn(2, 4, 3, 5), torch.randn(2, 4, 2)
     out = model(slots, actions)
     assert out.shape == slots.shape
@@ -77,9 +92,18 @@ def test_ocvp_layer_shape():
 
 
 def test_make_ocvp_seq_dynamics_model():
-    model = make_ocvp_seq_dynamics_model(num_slots=2, slot_dim=4, sequence_length=3, action_dim=2, token_dim=8,
-                                         hidden_dim=8, num_layers=1, num_heads=2, input_buffer_size=5,
-                                         teacher_forcing=True)
+    model = make_ocvp_seq_dynamics_model(
+        num_slots=2,
+        slot_dim=4,
+        sequence_length=3,
+        action_dim=2,
+        token_dim=8,
+        hidden_dim=8,
+        num_layers=1,
+        num_heads=2,
+        input_buffer_size=5,
+        teacher_forcing=True,
+    )
     assert isinstance(model, AutoregressiveWrapper) and model.teacher_forcing
     assert model.input_buffer_size == 5
     out = model.predict_slots(torch.randn(1, 5, 2, 4), torch.randn(1, 4, 2), steps=3, num_context=2)
@@ -88,9 +112,18 @@ def test_make_ocvp_seq_dynamics_model():
 
 # ------------------------------------------------------------------ slot aggregation transformer
 def _transformer(steps=6, num_slots=2, slot_dim=4, registers=1):
-    return SlotAggregationTransformer(AlibiMask(steps, 2, num_slots, registers), NoPositionalEncoding(steps, 8), steps,
-                                      num_slots, slot_dim, token_dim=8, num_heads=2, num_layers=2, hidden_dim=16,
-                                      num_register_tokens=registers)
+    return SlotAggregationTransformer(
+        AlibiMask(steps, 2, num_slots, registers),
+        NoPositionalEncoding(steps, 8),
+        steps,
+        num_slots,
+        slot_dim,
+        token_dim=8,
+        num_heads=2,
+        num_layers=2,
+        hidden_dim=16,
+        num_register_tokens=registers,
+    )
 
 
 def test_slot_aggregation_transformer_output_and_start():
@@ -140,8 +173,9 @@ def test_transformer_encoder_layer_with_and_without_mask():
 
 
 # --------------------------------------------------------------------------------- predictors
-PREDICTOR_ARGS = dict(max_episode_steps=6, num_slots=2, slot_dim=4, token_dim=8, num_heads=2, num_layers=1,
-                      hidden_dim=16)
+PREDICTOR_ARGS = dict(
+    max_episode_steps=6, num_slots=2, slot_dim=4, token_dim=8, num_heads=2, num_layers=1, hidden_dim=16
+)
 
 
 def test_rms_norm():
@@ -194,8 +228,9 @@ def test_gaussian_predictor_bounds_and_std():
 
 
 def test_gaussian_predictor_std_bounds_are_configurable():
-    model = GaussianPredictor(**PREDICTOR_ARGS, output_dim=2, lower_bound=[-1.0, -1.0], upper_bound=[1.0, 1.0],
-                              min_std=0.2, max_std=0.5)
+    model = GaussianPredictor(
+        **PREDICTOR_ARGS, output_dim=2, lower_bound=[-1.0, -1.0], upper_bound=[1.0, 1.0], min_std=0.2, max_std=0.5
+    )
     for bias, expected in [(100.0, 0.5), (-100.0, 0.2)]:
         with torch.no_grad():
             model.mlp[-1].bias.fill_(bias)
@@ -227,11 +262,22 @@ def test_gaussian_predictor_mean_reaches_the_action_bounds():
     assert torch.allclose(mean, torch.ones_like(mean), atol=1e-4), "the mean stops at tanh(1) ~ 0.76"
 
 
-@pytest.mark.xfail(strict=True, reason="BUGS_AND_PITFALLS.md #30: teacher forcing lets the dynamics model see the frame it predicts")
+@pytest.mark.xfail(
+    strict=True, reason="BUGS_AND_PITFALLS.md #30: teacher forcing lets the dynamics model see the frame it predicts"
+)
 def test_teacher_forcing_does_not_see_the_frame_it_predicts():
-    model = make_ocvp_seq_dynamics_model(num_slots=2, slot_dim=4, sequence_length=3, action_dim=2, token_dim=8,
-                                         hidden_dim=8, num_layers=1, num_heads=2, input_buffer_size=6,
-                                         teacher_forcing=True).eval()
+    model = make_ocvp_seq_dynamics_model(
+        num_slots=2,
+        slot_dim=4,
+        sequence_length=3,
+        action_dim=2,
+        token_dim=8,
+        hidden_dim=8,
+        num_layers=1,
+        num_heads=2,
+        input_buffer_size=6,
+        teacher_forcing=True,
+    ).eval()
     slots, actions = torch.randn(1, 5, 2, 4), torch.randn(1, 4, 2)
     with torch.no_grad():
         first = model.predict_slots(slots, actions, steps=3, num_context=2)[:, 0]

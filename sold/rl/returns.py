@@ -2,8 +2,9 @@ import torch
 import torch.nn as nn
 
 
-def lambda_returns(rewards: torch.Tensor, values: torch.Tensor, discount_factor: float,
-                   return_lambda: float) -> torch.Tensor:
+def lambda_returns(
+    rewards: torch.Tensor, values: torch.Tensor, discount_factor: float, return_lambda: float
+) -> torch.Tensor:
     """λ-returns of imagined trajectories, bootstrapped with the last step's value.
 
     R_t = r_t + γ(1 - λ) v_t + γλ R_{t+1}, R_horizon = v_{horizon - 1}. rewards, values and the result have shape

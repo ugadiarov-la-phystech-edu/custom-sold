@@ -19,7 +19,7 @@ class ImagePositionalEmbedding(nn.Module):
 
         # Create a grid of shape (1, 4, H, W) with gradients  [0, 1] in [x, y, -x, -y] directions.
         y, x = [torch.linspace(-1.0, 1.0, steps=resolution) for resolution in image_size]
-        yy, xx = torch.meshgrid(y, x, indexing='ij')
+        yy, xx = torch.meshgrid(y, x, indexing="ij")
         position = torch.stack([yy, xx], dim=-1)  # Shape: (H, W, 2).
         grid = torch.cat([position, 1.0 - position], dim=-1)
         self.register_buffer("grid", grid.unsqueeze(0).permute(0, 3, 1, 2))  # Shape: (1, 4, H, W).
@@ -34,8 +34,14 @@ class ImagePositionalEmbedding(nn.Module):
 class SaviCnnEncoder(CnnEncoder):
     """CNN Encoder proposed by Slot Attention (https://arxiv.org/pdf/2006.15055, Section E.1)."""
 
-    def __init__(self, image_size: Tuple[int, int], num_channels: List[int],
-                 kernel_sizes: List[int], strides: List[int], feature_dim: int) -> None:
+    def __init__(
+        self,
+        image_size: Tuple[int, int],
+        num_channels: List[int],
+        kernel_sizes: List[int],
+        strides: List[int],
+        feature_dim: int,
+    ) -> None:
         super().__init__(num_channels, kernel_sizes, strides)
         self.positional_embedding = ImagePositionalEmbedding(feature_dim=num_channels[-1], image_size=image_size)
         self.shared_mlp = nn.Sequential(

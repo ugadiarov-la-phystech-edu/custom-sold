@@ -104,6 +104,7 @@ def test_make_env_rejects_unknown_suite():
 
 def test_make_env_mof_suite(monkeypatch):
     import envs.from_mof as from_mof
+
     created = []
 
     def fake_make_gym_env(name, image_size, max_episode_steps, action_repeat, seed):
@@ -127,9 +128,13 @@ def test_make_env_mof_suite(monkeypatch):
 
 def test_make_env_mof_suite_without_seed(monkeypatch):
     import envs.from_mof as from_mof
+
     seeds = []
-    monkeypatch.setattr(from_mof, "make_gym_env", lambda name, size, steps, repeat, seed: (
-        seeds.append(seed), Pixels(fakes.FakePixelEnv(), size))[1])
+    monkeypatch.setattr(
+        from_mof,
+        "make_gym_env",
+        lambda name, size, steps, repeat, seed: (seeds.append(seed), Pixels(fakes.FakePixelEnv(), size))[1],
+    )
     envs.make_env("mof", "PushRed_2to2Distractors_Dense-v1", (8, 8), 50, 2)
     assert seeds == [None]
 
@@ -144,6 +149,7 @@ def test_make_env_survival_suite_with_fake_module(monkeypatch):
     env = envs.make_env("survival", "Forage", (8, 8), 10, 1, seed=3)
     assert survival.calls == [("Forage", (8, 8), 10, 1, 3)]
     from envs.wrappers.to_tensordict import ToTensorDict
+
     assert isinstance(env, ToTensor) and isinstance(env.env, ToTensorDict)
 
 
@@ -172,6 +178,7 @@ def test_survival_suite_is_usable_or_rejected_cleanly():
 # BUGS_AND_PITFALLS.md #12 (fixed).
 def test_distractor_wrapper_does_not_leak_environments(monkeypatch):
     import envs.from_mof as from_mof
+
     created = []
 
     def fake_make_gym_env(name, image_size, max_episode_steps, action_repeat, seed):
@@ -199,7 +206,6 @@ def test_pixels_wrapper_does_not_require_multi_object_fetch(monkeypatch):
 def test_pixels_observation_matches_observation_space_for_non_square_sizes():
     env = Pixels(fakes.FakePixelEnv(), image_size=(8, 6))
     assert env.reset().shape == env.observation_space.shape
-
 
 
 # ------------------------------------------------------------------------------- dm_control

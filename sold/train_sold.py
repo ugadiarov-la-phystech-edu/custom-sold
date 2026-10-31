@@ -25,6 +25,7 @@ from utils.visualizations import dynamics_figure, imagination_figures, reward_fi
 @dataclass
 class Imagination:
     """Outputs of SOLDModule.imagine_ahead for horizon imagined steps."""
+
     lambda_returns: torch.Tensor  # (batch_size, horizon)
     predicted_values_targ: torch.Tensor  # Target critic's values, (batch_size, horizon).
     predicted_values_dist: D.Distribution  # Critic's predictions, mean of shape (batch_size, horizon, 1).
@@ -36,38 +37,90 @@ class Imagination:
 
 
 class SOLDModule(OnlineModule):
-    def __init__(self, autoencoder: Autoencoder, dynamics_predictor, actor, critic, reward_predictor,
-                 dynamics_learning_rate: float, dynamics_grad_clip: float,
-                 actor_learning_rate: float, actor_grad_clip: float, critic_learning_rate: float,
-                 critic_grad_clip: float, reward_learning_rate: float, reward_grad_clip: float,
-                 finetune_autoencoder: bool, autoencoder_learning_rate: float, autoencoder_grad_clip: float,
-                 num_context: int | Tuple[int, int], imagination_horizon: int, start_imagination_from_every: bool,
-                 actor_entropy_loss_weight: float, actor_gradients: str, return_lambda: float, discount_factor: float,
-                 critic_ema_decay: float, env: gym.Env, max_steps: int, num_seed: int, update_freq: int,
-                 num_updates: int, eval_freq: int, num_eval_episodes: int, batch_size: int, buffer_capacity: int,
-                 save_replay_buffer: bool, critic_regularization_weight: float = 0.1) -> None:
-
-        self.min_num_context, self.max_num_context = (num_context, num_context) if isinstance(num_context, int) else num_context
+    def __init__(
+        self,
+        autoencoder: Autoencoder,
+        dynamics_predictor,
+        actor,
+        critic,
+        reward_predictor,
+        dynamics_learning_rate: float,
+        dynamics_grad_clip: float,
+        actor_learning_rate: float,
+        actor_grad_clip: float,
+        critic_learning_rate: float,
+        critic_grad_clip: float,
+        reward_learning_rate: float,
+        reward_grad_clip: float,
+        finetune_autoencoder: bool,
+        autoencoder_learning_rate: float,
+        autoencoder_grad_clip: float,
+        num_context: int | Tuple[int, int],
+        imagination_horizon: int,
+        start_imagination_from_every: bool,
+        actor_entropy_loss_weight: float,
+        actor_gradients: str,
+        return_lambda: float,
+        discount_factor: float,
+        critic_ema_decay: float,
+        env: gym.Env,
+        max_steps: int,
+        num_seed: int,
+        update_freq: int,
+        num_updates: int,
+        eval_freq: int,
+        num_eval_episodes: int,
+        batch_size: int,
+        buffer_capacity: int,
+        save_replay_buffer: bool,
+        critic_regularization_weight: float = 0.1,
+    ) -> None:
+        self.min_num_context, self.max_num_context = (
+            (num_context, num_context) if isinstance(num_context, int) else num_context
+        )
         if self.min_num_context > self.max_num_context:
             raise ValueError("min_num_context must be less than or equal to max_num_context.")
         sequence_length = imagination_horizon + self.max_num_context
 
-        super().__init__(env, max_steps, num_seed, update_freq, num_updates, eval_freq, num_eval_episodes, batch_size,
-                         sequence_length, buffer_capacity, save_replay_buffer)
+        super().__init__(
+            env,
+            max_steps,
+            num_seed,
+            update_freq,
+            num_updates,
+            eval_freq,
+            num_eval_episodes,
+            batch_size,
+            sequence_length,
+            buffer_capacity,
+            save_replay_buffer,
+        )
         self.automatic_optimization = False
-        self.save_hyperparameters(logger=False, ignore=['env'])
+        self.save_hyperparameters(logger=False, ignore=["env"])
 
-        regression_infos = {"max_episode_steps": env.max_episode_steps,  "num_slots": autoencoder.num_slots,
-                            "slot_dim": autoencoder.slot_dim}
+        regression_infos = {
+            "max_episode_steps": env.max_episode_steps,
+            "num_slots": autoencoder.num_slots,
+            "slot_dim": autoencoder.slot_dim,
+        }
         self.autoencoder = autoencoder
-        self.actor = actor(**regression_infos, output_dim=env.action_space.shape[0], lower_bound=env.action_space.low, upper_bound=env.action_space.high)
+        self.actor = actor(
+            **regression_infos,
+            output_dim=env.action_space.shape[0],
+            lower_bound=env.action_space.low,
+            upper_bound=env.action_space.high,
+        )
         self.critic = critic(**regression_infos)
         self.critic_target = copy.deepcopy(self.critic)
         self.critic_target.requires_grad_(False)  # Updated only by EMA, never by gradients.
         self.reward_predictor = reward_predictor(**regression_infos)
         self.dynamics_predictor = dynamics_predictor(
-                num_slots=autoencoder.num_slots, slot_dim=autoencoder.slot_dim, sequence_length=imagination_horizon,
-                action_dim=env.action_space.shape[0], input_buffer_size=sequence_length)
+            num_slots=autoencoder.num_slots,
+            slot_dim=autoencoder.slot_dim,
+            sequence_length=imagination_horizon,
+            action_dim=env.action_space.shape[0],
+            input_buffer_size=sequence_length,
+        )
 
         self.dynamics_learning_rate = dynamics_learning_rate
         self.dynamics_grad_clip = dynamics_grad_clip
@@ -97,17 +150,25 @@ class SOLDModule(OnlineModule):
         self.current_losses = defaultdict(list)
 
     def configure_optimizers(self) -> OptimizerLRScheduler:
-        optimizers = [torch.optim.Adam(self.dynamics_predictor.parameters(), lr=self.dynamics_learning_rate),
-                      torch.optim.Adam(self.reward_predictor.parameters(), lr=self.reward_learning_rate),
-                      torch.optim.Adam(self.actor.parameters(), lr=self.actor_learning_rate),
-                      torch.optim.Adam(self.critic.parameters(), lr=self.critic_learning_rate)]
+        optimizers = [
+            torch.optim.Adam(self.dynamics_predictor.parameters(), lr=self.dynamics_learning_rate),
+            torch.optim.Adam(self.reward_predictor.parameters(), lr=self.reward_learning_rate),
+            torch.optim.Adam(self.actor.parameters(), lr=self.actor_learning_rate),
+            torch.optim.Adam(self.critic.parameters(), lr=self.critic_learning_rate),
+        ]
         if self.finetune_autoencoder:  # Returned here so that its state is saved in checkpoints.
             optimizers.append(torch.optim.Adam(self.autoencoder.parameters(), lr=self.autoencoder_learning_rate))
         return optimizers
 
     def training_step(self, batch, batch_index: int) -> STEP_OUTPUT:
-        dynamics_optimizer, reward_optimizer, actor_optimizer, critic_optimizer, *autoencoder_optimizers = self.optimizers()
-        images, actions, rewards = batch["obs"].squeeze(0) / 255., batch["action"].squeeze(0), batch["reward"].squeeze(0)
+        dynamics_optimizer, reward_optimizer, actor_optimizer, critic_optimizer, *autoencoder_optimizers = (
+            self.optimizers()
+        )
+        images, actions, rewards = (
+            batch["obs"].squeeze(0) / 255.0,
+            batch["action"].squeeze(0),
+            batch["reward"].squeeze(0),
+        )
 
         # Without fine-tuning, the autoencoder forward pass needs no autograd graph.
         with torch.set_grad_enabled(self.finetune_autoencoder):
@@ -134,13 +195,18 @@ class SOLDModule(OnlineModule):
         imagination = self.imagine_ahead(slots, actions)
 
         # Learn the actor.
-        outputs |= self.compute_actor_loss(imagination.lambda_returns, imagination.predicted_values_targ,
-                                           imagination.action_log_probs, imagination.action_entropies)
+        outputs |= self.compute_actor_loss(
+            imagination.lambda_returns,
+            imagination.predicted_values_targ,
+            imagination.action_log_probs,
+            imagination.action_entropies,
+        )
         self._optimize(actor_optimizer, outputs["actor_loss"], self.actor_grad_clip)
 
         # Learn the critic.
-        outputs |= self.compute_critic_loss(imagination.predicted_values_dist, imagination.lambda_returns,
-                                            imagination.predicted_values_targ)
+        outputs |= self.compute_critic_loss(
+            imagination.predicted_values_dist, imagination.lambda_returns, imagination.predicted_values_targ
+        )
         self._optimize(critic_optimizer, outputs["critic_loss"], self.critic_grad_clip)
 
         if self.after_eval:
@@ -154,20 +220,30 @@ class SOLDModule(OnlineModule):
         return outputs
 
     @torch.no_grad()
-    def log_visualizations(self, rewards: torch.Tensor, reconstruction: Dict[str, Any], outputs: Dict[str, Any],
-                           imagination: Imagination) -> None:
+    def log_visualizations(
+        self, rewards: torch.Tensor, reconstruction: Dict[str, Any], outputs: Dict[str, Any], imagination: Imagination
+    ) -> None:
         """Log figures of the first sample of a training batch (after each evaluation).
 
         reconstruction: the autoencoder's outputs; outputs: those of compute_dynamics_loss and compute_reward_loss.
         Attention maps show the reward predictor and actor after this step's update.
         """
-        self.log_image("autoencoder_reconstruction", self.autoencoder.visualize_reconstruction(
-            {k: v[0] for k, v in reconstruction.items() if v.dim() > 0}))
-        self.log_image("dynamics_prediction", dynamics_figure(self.autoencoder, reconstruction, outputs["num_context"],
-                                                        outputs["predicted_outputs"]))
+        self.log_image(
+            "autoencoder_reconstruction",
+            self.autoencoder.visualize_reconstruction({k: v[0] for k, v in reconstruction.items() if v.dim() > 0}),
+        )
+        self.log_image(
+            "dynamics_prediction",
+            dynamics_figure(self.autoencoder, reconstruction, outputs["num_context"], outputs["predicted_outputs"]),
+        )
         figures = reward_figures(self.reward_predictor, reconstruction, rewards, outputs["predicted_rewards"])
-        figures |= imagination_figures(self.autoencoder, self.actor, imagination.imagined_slots,
-                                       imagination.num_context, imagination.predicted_rewards)
+        figures |= imagination_figures(
+            self.autoencoder,
+            self.actor,
+            imagination.imagined_slots,
+            imagination.num_context,
+            imagination.predicted_rewards,
+        )
         for name, image in figures.items():
             self.log_image(name, image)
 
@@ -183,17 +259,28 @@ class SOLDModule(OnlineModule):
         batch_size, sequence_length, num_slots, slot_dim = slots.size()
         num_context = torch.randint(self.min_num_context, self.max_num_context + 1, (1,)).item()
 
-        future_slots = self.dynamics_predictor.predict_slots(slots, actions[:, 1:].clone().detach(), steps=self.imagination_horizon, num_context=num_context)
+        future_slots = self.dynamics_predictor.predict_slots(
+            slots, actions[:, 1:].clone().detach(), steps=self.imagination_horizon, num_context=num_context
+        )
         future_outputs = self.autoencoder.decode(future_slots)
-        slot_loss = F.mse_loss(future_slots, slots[:, num_context:num_context + self.imagination_horizon])
-        image_loss = F.mse_loss(future_outputs["reconstructions"], images[:, num_context:num_context + self.imagination_horizon])
+        slot_loss = F.mse_loss(future_slots, slots[:, num_context : num_context + self.imagination_horizon])
+        image_loss = F.mse_loss(
+            future_outputs["reconstructions"], images[:, num_context : num_context + self.imagination_horizon]
+        )
 
         # For figures: the first sample's decoded predictions (the batch is freed after the update).
         predicted_outputs = {k: v[:1].detach().clone() for k, v in future_outputs.items()}
-        return {"slot_loss": slot_loss, "image_loss": image_loss, "dynamics_loss": slot_loss + image_loss,
-                "num_context": num_context, "predicted_outputs": predicted_outputs}
+        return {
+            "slot_loss": slot_loss,
+            "image_loss": image_loss,
+            "dynamics_loss": slot_loss + image_loss,
+            "num_context": num_context,
+            "predicted_outputs": predicted_outputs,
+        }
 
-    def compute_reward_loss(self, images: torch.Tensor, reconstructions: torch.Tensor, slots: torch.Tensor, rewards: torch.Tensor) -> Dict[str, Any]:
+    def compute_reward_loss(
+        self, images: torch.Tensor, reconstructions: torch.Tensor, slots: torch.Tensor, rewards: torch.Tensor
+    ) -> Dict[str, Any]:
         is_firsts = torch.isnan(rewards)  # We add NaN as a reward on the first time-step.
         predicted_rewards_dist = self.reward_predictor(slots.detach())
         log_probs = predicted_rewards_dist.log_prob(torch.nan_to_num(rewards).unsqueeze(2))
@@ -201,8 +288,11 @@ class SOLDModule(OnlineModule):
 
         predicted_rewards = predicted_rewards_dist.mean.squeeze(2).detach()
         # A metric: detached, converted to a number only when logged (no GPU sync).
-        return {"reward_loss": -masked_log_probs.mean(), "predicted_rewards": predicted_rewards,
-                "reward_mse_loss": F.mse_loss(predicted_rewards[~is_firsts], rewards[~is_firsts])}
+        return {
+            "reward_loss": -masked_log_probs.mean(),
+            "predicted_rewards": predicted_rewards,
+            "reward_mse_loss": F.mse_loss(predicted_rewards[~is_firsts], rewards[~is_firsts]),
+        }
 
     def imagine_ahead(self, slots: torch.Tensor, actions: torch.Tensor) -> Imagination:
         self.dynamics_predictor.eval()
@@ -211,8 +301,14 @@ class SOLDModule(OnlineModule):
 
         if self.start_imagination_from_every:
             num_context = self.max_num_context
-            slots_context = slots.unfold(dimension=1, size=self.max_num_context, step=1).flatten(end_dim=1).permute(0, 3, 1, 2)
-            actions_context = actions.unfold(dimension=1, size=self.max_num_context, step=1).flatten(end_dim=1).permute(0, 2, 1)[:, 1:]
+            slots_context = (
+                slots.unfold(dimension=1, size=self.max_num_context, step=1).flatten(end_dim=1).permute(0, 3, 1, 2)
+            )
+            actions_context = (
+                actions.unfold(dimension=1, size=self.max_num_context, step=1)
+                .flatten(end_dim=1)
+                .permute(0, 2, 1)[:, 1:]
+            )
         else:
             num_context = torch.randint(self.min_num_context, self.max_num_context + 1, (1,)).item()
             slots_context = slots[:, :num_context].detach()
@@ -228,7 +324,9 @@ class SOLDModule(OnlineModule):
                 action_log_probs.append(action_dist.log_prob(selected_action.unsqueeze(1)))
                 action_entropies.append(action_dist.entropy())
 
-                predicted_slots = self.dynamics_predictor.predict_slots(slots_context, actions_context, steps=1, num_context=slots_context.shape[1])
+                predicted_slots = self.dynamics_predictor.predict_slots(
+                    slots_context, actions_context, steps=1, num_context=slots_context.shape[1]
+                )
                 slots_context = torch.cat([slots_context, predicted_slots], dim=1)
 
         with FreezeParameters([self.reward_predictor, self.critic]):
@@ -246,31 +344,59 @@ class SOLDModule(OnlineModule):
         predicted_values_targ = self.critic_target(slots_context[:, :-1], start=num_context - 1).mean.squeeze(-1)
         predicted_values_dist = self.critic(slots_context[:, :-1], start=num_context - 1)
 
-        return Imagination(lambda_returns, predicted_values_targ, predicted_values_dist, action_log_probs,
-                           action_entropies, slots_context, num_context, predicted_rewards.detach())
+        return Imagination(
+            lambda_returns,
+            predicted_values_targ,
+            predicted_values_dist,
+            action_log_probs,
+            action_entropies,
+            slots_context,
+            num_context,
+            predicted_rewards.detach(),
+        )
 
-    def compute_actor_loss(self, lambda_returns: torch.Tensor, predicted_values_targ: torch.Tensor,
-                           action_log_probs: torch.Tensor, action_entropies: torch.Tensor) -> Dict[str, Any]:
+    def compute_actor_loss(
+        self,
+        lambda_returns: torch.Tensor,
+        predicted_values_targ: torch.Tensor,
+        action_log_probs: torch.Tensor,
+        action_entropies: torch.Tensor,
+    ) -> Dict[str, Any]:
         offset, invscale = self.return_moments(lambda_returns[:, :-1])  # Updates the running return percentiles.
-        return rl.losses.actor_loss(lambda_returns, predicted_values_targ, action_log_probs, action_entropies,
-                                    self.discounts, offset, invscale, self.actor_gradients,
-                                    self.actor_entropy_loss_weight)
+        return rl.losses.actor_loss(
+            lambda_returns,
+            predicted_values_targ,
+            action_log_probs,
+            action_entropies,
+            self.discounts,
+            offset,
+            invscale,
+            self.actor_gradients,
+            self.actor_entropy_loss_weight,
+        )
 
-    def compute_critic_loss(self, predicted_values_dist: D.Distribution, lambda_returns: torch.Tensor,
-                            predicted_values_targ: torch.Tensor) -> Dict[str, Any]:
-        return rl.losses.critic_loss(predicted_values_dist, lambda_returns, predicted_values_targ, self.discounts,
-                                     self.critic_regularization_weight)
+    def compute_critic_loss(
+        self, predicted_values_dist: D.Distribution, lambda_returns: torch.Tensor, predicted_values_targ: torch.Tensor
+    ) -> Dict[str, Any]:
+        return rl.losses.critic_loss(
+            predicted_values_dist,
+            lambda_returns,
+            predicted_values_targ,
+            self.discounts,
+            self.critic_regularization_weight,
+        )
 
     def compute_lambda_returns(self, rewards: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
         return rl.returns.lambda_returns(rewards, values, self.discount_factor, self.return_lambda)
 
     def select_action(self, observation: torch.Tensor, is_first: bool = False, mode: str = "train") -> torch.Tensor:
-        observation = observation.unsqueeze(0) / 255.  # Expand batch dimension (1, 3, height, width).
+        observation = observation.unsqueeze(0) / 255.0  # Expand batch dimension (1, 3, height, width).
 
         # Encode image into slots and append to context.
         last_slots = None if is_first else self._slot_history[:, -1]
-        slots = self.autoencoder.encode(observation.unsqueeze(1), self.last_action.unsqueeze(0).unsqueeze(1),
-                                        prior_slots=last_slots)  # Expand sequence (and batch) dimension.
+        slots = self.autoencoder.encode(
+            observation.unsqueeze(1), self.last_action.unsqueeze(0).unsqueeze(1), prior_slots=last_slots
+        )  # Expand sequence (and batch) dimension.
         self._slot_history = slots if is_first else torch.cat([self._slot_history, slots], dim=1)
 
         if mode == "random":
@@ -293,6 +419,7 @@ class SOLDModule(OnlineModule):
 def train(cfg: DictConfig):
     if cfg.logger.log_to_wandb:
         import wandb
+
         wandb.init(project="sold", name=cfg.experiment, config=dict(cfg), sync_tensorboard=True)
     print_summary(cfg)
     set_seed(cfg.seed)

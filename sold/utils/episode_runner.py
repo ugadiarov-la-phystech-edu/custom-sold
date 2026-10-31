@@ -30,8 +30,9 @@ class EpisodeRunner:
         return self.obs, reward, self.done, info
 
     @torch.no_grad()
-    def play_episode(self, mode: str = "eval",
-                     render: Optional[Callable[[gym.Env], torch.Tensor]] = None) -> Dict[str, Any]:
+    def play_episode(
+        self, mode: str = "eval", render: Optional[Callable[[gym.Env], torch.Tensor]] = None
+    ) -> Dict[str, Any]:
         """Play a whole episode without storing experience.
 
         Returns the observations, rewards, final "success" (if reported) and, with render, a frame after every reset

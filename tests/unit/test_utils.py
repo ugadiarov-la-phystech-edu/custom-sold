@@ -41,12 +41,16 @@ def test_instantiate_many_skips_non_targets():
 
 
 def test_instantiate_trainer(tmp_path):
-    cfg = OmegaConf.create({
-        "trainer": {"_target_": "lightning.Trainer", "max_epochs": 1, "accelerator": "cpu"},
-        "logger": {"tb": {"_target_": "utils.logging.ExtendedTensorBoardLogger", "save_dir": str(tmp_path)},
-                   "log_to_wandb": False},
-        "callbacks": {"bar": {"_target_": "utils.training.OnlineProgressBar"}},
-    })
+    cfg = OmegaConf.create(
+        {
+            "trainer": {"_target_": "lightning.Trainer", "max_epochs": 1, "accelerator": "cpu"},
+            "logger": {
+                "tb": {"_target_": "utils.logging.ExtendedTensorBoardLogger", "save_dir": str(tmp_path)},
+                "log_to_wandb": False,
+            },
+            "callbacks": {"bar": {"_target_": "utils.training.OnlineProgressBar"}},
+        }
+    )
     trainer = instantiate_trainer(cfg)
     assert isinstance(trainer.logger, ExtendedTensorBoardLogger)
     assert any(type(c).__name__ == "OnlineProgressBar" for c in trainer.callbacks)
@@ -54,8 +58,16 @@ def test_instantiate_trainer(tmp_path):
 
 def test_instantiate_dataloaders(tmp_path):
     write_image_dataset(tmp_path / "run", "npz")
-    cfg = OmegaConf.create({"_target_": "datasets.image.load_image_dataset", "path": str(tmp_path), "data_dir": "run",
-                            "sequence_length": 3, "batch_size": 2, "num_workers": 0})
+    cfg = OmegaConf.create(
+        {
+            "_target_": "datasets.image.load_image_dataset",
+            "path": str(tmp_path),
+            "data_dir": "run",
+            "sequence_length": 3,
+            "batch_size": 2,
+            "num_workers": 0,
+        }
+    )
     train, val, infos = instantiate_dataloaders(cfg)
     assert infos == {"image_size": [16, 16], "action_dim": 2}
     assert train.dataset.split == "train" and val.dataset.split == "val"
@@ -64,8 +76,16 @@ def test_instantiate_dataloaders(tmp_path):
 
 
 def test_fill_in_missing_by_key_suffix():
-    cfg = OmegaConf.create({"model": {"encoder": {"image_size": "???"}, "decoder": {"image_size": "???"},
-                                      "predictor": {"action_dim": "???"}, "other": "???"}})
+    cfg = OmegaConf.create(
+        {
+            "model": {
+                "encoder": {"image_size": "???"},
+                "decoder": {"image_size": "???"},
+                "predictor": {"action_dim": "???"},
+                "other": "???",
+            }
+        }
+    )
     fill_in_missing(cfg, {"image_size": [8, 8], "action_dim": 3})
     assert cfg.model.encoder.image_size == [8, 8] and cfg.model.decoder.image_size == [8, 8]
     assert cfg.model.predictor.action_dim == 3
@@ -201,8 +221,9 @@ def _learning_rates(scheduler_class, epochs, **kwargs):
 
 
 def test_warmup_cosine_schedule_follows_the_closed_form():
-    rates = _learning_rates(LinearWarmupCosineAnnealingLR, 30, warmup_epochs=5, max_epochs=25, warmup_start_lr=1e-4,
-                            eta_min=1e-5)
+    rates = _learning_rates(
+        LinearWarmupCosineAnnealingLR, 30, warmup_epochs=5, max_epochs=25, warmup_start_lr=1e-4, eta_min=1e-5
+    )
     expected = [1e-4 + t * (1e-3 - 1e-4) / 4 for t in range(5)]
     expected += [1e-5 + 0.5 * (1e-3 - 1e-5) * (1 + math.cos(math.pi * (t - 5) / 20)) for t in range(5, 30)]
     assert rates == pytest.approx(expected, rel=1e-9, abs=1e-12)
@@ -213,8 +234,9 @@ def test_warmup_cosine_schedule_matches_lightning_bolts_exactly():
     lr_scheduler = pytest.importorskip("pl_bolts.optimizers.lr_scheduler")
     for kwargs in [dict(warmup_epochs=10, max_epochs=40), dict(warmup_epochs=3, max_epochs=8, eta_min=1e-4)]:
         # Past max_epochs too, covering the chainable form's restart branch.
-        assert (_learning_rates(LinearWarmupCosineAnnealingLR, 60, **kwargs)
-                == _learning_rates(lr_scheduler.LinearWarmupCosineAnnealingLR, 60, **kwargs))
+        assert _learning_rates(LinearWarmupCosineAnnealingLR, 60, **kwargs) == _learning_rates(
+            lr_scheduler.LinearWarmupCosineAnnealingLR, 60, **kwargs
+        )
 
 
 def test_warmup_cosine_schedule_warns_when_get_lr_is_called_directly():
@@ -266,15 +288,21 @@ def test_draw_ticks_and_rewards():
     assert labels.shape == (2, 3, 8, 16) and labels.max() <= 1.0 and labels.min() < 1.0
     drawn = vis.draw_reward(torch.zeros(2, 3, 32, 32), torch.tensor([0.5, 1.0]))
     assert drawn.dtype == torch.uint8 and drawn.shape == (2, 3, 32, 32) and drawn.max() > 200
-    image = vis.visualize_reward_prediction(torch.zeros(3, 3, 32, 32), torch.zeros(3, 3, 32, 32),
-                                            torch.tensor([float("nan"), 1.0, 2.0]), torch.tensor([0.0, 1.0, 2.0]))
+    image = vis.visualize_reward_prediction(
+        torch.zeros(3, 3, 32, 32),
+        torch.zeros(3, 3, 32, 32),
+        torch.tensor([float("nan"), 1.0, 2.0]),
+        torch.tensor([0.0, 1.0, 2.0]),
+    )
     assert image.shape == (3, 2 * 36 + 2, 3 * 34 + 2)
 
 
 def _predictor():
     from modeling.sold.prediction import TwoHotPredictor
-    return TwoHotPredictor(max_episode_steps=6, num_slots=2, slot_dim=4, token_dim=8, num_heads=2, num_layers=2,
-                           hidden_dim=8)
+
+    return TwoHotPredictor(
+        max_episode_steps=6, num_slots=2, slot_dim=4, token_dim=8, num_heads=2, num_layers=2, hidden_dim=8
+    )
 
 
 def test_get_attention_weights_on_a_predictor():
@@ -300,21 +328,31 @@ def test_attention_visualizations():
     rgbs, masks = torch.rand(seq, slots, 3, 8, 8), torch.rand(seq, slots, 1, 8, 8)
     brightness, colormap = vis.get_output_attention_images(weights, rgbs, masks)
     assert brightness.shape == colormap.shape == (seq, 3, 8, 8)
-    assert vis.visualize_output_attention(weights, torch.rand(seq, 3, 8, 8), rgbs, masks).shape == (3, 3 * 12 + 2 * 2,
-                                                                                                   seq * 10 + 2)
+    assert vis.visualize_output_attention(weights, torch.rand(seq, 3, 8, 8), rgbs, masks).shape == (
+        3,
+        3 * 12 + 2 * 2,
+        seq * 10 + 2,
+    )
     images, reconstructions = torch.rand(seq, 3, 32, 32), torch.rand(seq, 3, 32, 32)
-    out = vis.visualize_reward_predictor_attention(images, reconstructions, torch.tensor([0.0, 1.0, 2.0]),
-                                                   torch.tensor([0.0, 1.0, 2.5]), weights, torch.rand(seq, slots, 3, 32,
-                                                                                                      32),
-                                                   torch.rand(seq, slots, 1, 32, 32))
+    out = vis.visualize_reward_predictor_attention(
+        images,
+        reconstructions,
+        torch.tensor([0.0, 1.0, 2.0]),
+        torch.tensor([0.0, 1.0, 2.5]),
+        weights,
+        torch.rand(seq, slots, 3, 32, 32),
+        torch.rand(seq, slots, 1, 32, 32),
+    )
     assert out.shape == (3, 4 * 36 + 3 * 2, seq * 34 + 2)
 
 
 # BUGS_AND_PITFALLS.md #22 (fixed).
 def test_attention_visualization_does_not_stack_forward_wrappers():
     from modeling.sold.prediction import TwoHotPredictor
-    model = TwoHotPredictor(max_episode_steps=4, num_slots=2, slot_dim=4, token_dim=8, num_heads=2, num_layers=1,
-                            hidden_dim=8)
+
+    model = TwoHotPredictor(
+        max_episode_steps=4, num_slots=2, slot_dim=4, token_dim=8, num_heads=2, num_layers=1, hidden_dim=8
+    )
     slots = torch.randn(1, 3, 2, 4)
     for _ in range(sys.getrecursionlimit() + 100):  # One call per evaluation during training.
         vis.get_attention_weights(model, slots)

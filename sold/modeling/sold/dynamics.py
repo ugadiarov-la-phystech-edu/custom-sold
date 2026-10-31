@@ -20,9 +20,9 @@ class AutoregressiveWrapper(nn.Module):
 
     def predict_slots(self, slots: torch.Tensor, actions: torch.Tensor, steps: int, num_context: int) -> torch.Tensor:
         if self.teacher_forcing and self.batched_processing:
-            input_slots = self._update_buffer_size(slots[:, :num_context + steps - 1].clone())
-            input_actions = self._update_buffer_size(actions.clone()[:, :num_context + steps - 1])
-            predicted_slots = self.predictor(input_slots, input_actions)[:, num_context - 1:]
+            input_slots = self._update_buffer_size(slots[:, : num_context + steps - 1].clone())
+            input_actions = self._update_buffer_size(actions.clone()[:, : num_context + steps - 1])
+            predicted_slots = self.predictor(input_slots, input_actions)[:, num_context - 1 :]
 
         else:
             input_slots = self._update_buffer_size(slots[:, :num_context].clone())
@@ -42,8 +42,19 @@ class AutoregressiveWrapper(nn.Module):
 
 
 class OCVPSeqDynamicsModel(nn.Module):
-    def __init__(self, num_slots: int, slot_dim: int, sequence_length: int, action_dim: int, token_dim=128, hidden_dim=256, num_layers=2,
-                 num_heads=4, residual=True, input_buffer_size=5):
+    def __init__(
+        self,
+        num_slots: int,
+        slot_dim: int,
+        sequence_length: int,
+        action_dim: int,
+        token_dim=128,
+        hidden_dim=256,
+        num_layers=2,
+        num_heads=4,
+        residual=True,
+        input_buffer_size=5,
+    ):
         super().__init__()
         self.num_slots = num_slots
         self.slot_dim = slot_dim
@@ -62,12 +73,8 @@ class OCVPSeqDynamicsModel(nn.Module):
 
         # Embed_dim will be split across num_heads, i.e., each head will have dim. embed_dim // num_heads
         self.transformer_encoders = nn.Sequential(
-            *[OCVPSeqLayer(
-                    token_dim=token_dim,
-                    hidden_dim=hidden_dim,
-                    n_heads=num_heads
-                ) for _ in range(num_layers)]
-            )
+            *[OCVPSeqLayer(token_dim=token_dim, hidden_dim=hidden_dim, n_heads=num_heads) for _ in range(num_layers)]
+        )
 
         # custom temporal encoding. All slots from the same time step share the same encoding
         self.pe = SinusoidalPositionalEncoding(d_model=self.token_dim, max_len=input_buffer_size)
@@ -83,11 +90,7 @@ class OCVPSeqDynamicsModel(nn.Module):
         # projecting slots into tokens, and applying positional encoding
         token_input = self.mlp_in(slots)
         token_input = torch.cat((token_input, action_embeddings.unsqueeze(2)), dim=2)
-        time_encoded_input = self.pe(
-            x=token_input,
-            batch_size=batch_size,
-            num_slots=num_slots + 1
-        )
+        time_encoded_input = self.pe(x=token_input, batch_size=batch_size, num_slots=num_slots + 1)
 
         # feeding through transformer blocks
         token_output = time_encoded_input
@@ -108,19 +111,11 @@ class OCVPSeqLayer(nn.Module):
         self.nhead = n_heads
 
         self.object_encoder_block = torch.nn.TransformerEncoderLayer(
-                d_model=token_dim,
-                nhead=self.nhead,
-                batch_first=True,
-                norm_first=True,
-                dim_feedforward=hidden_dim
-            )
+            d_model=token_dim, nhead=self.nhead, batch_first=True, norm_first=True, dim_feedforward=hidden_dim
+        )
         self.time_encoder_block = torch.nn.TransformerEncoderLayer(
-                d_model=token_dim,
-                nhead=self.nhead,
-                batch_first=True,
-                norm_first=True,
-                dim_feedforward=hidden_dim
-            )
+            d_model=token_dim, nhead=self.nhead, batch_first=True, norm_first=True, dim_feedforward=hidden_dim
+        )
         return
 
     def forward(self, inputs, time_mask=None):
@@ -141,7 +136,31 @@ class OCVPSeqLayer(nn.Module):
         return object_encoded_out
 
 
-def make_ocvp_seq_dynamics_model(num_slots: int, slot_dim: int, sequence_length: int, action_dim: int, token_dim=128, hidden_dim=256, num_layers=2,
-                 num_heads=4, residual=True, input_buffer_size=5, teacher_forcing=False):
-    return AutoregressiveWrapper(OCVPSeqDynamicsModel(num_slots, slot_dim, sequence_length, action_dim, token_dim, hidden_dim, num_layers, num_heads, residual, input_buffer_size), teacher_forcing)
-
+def make_ocvp_seq_dynamics_model(
+    num_slots: int,
+    slot_dim: int,
+    sequence_length: int,
+    action_dim: int,
+    token_dim=128,
+    hidden_dim=256,
+    num_layers=2,
+    num_heads=4,
+    residual=True,
+    input_buffer_size=5,
+    teacher_forcing=False,
+):
+    return AutoregressiveWrapper(
+        OCVPSeqDynamicsModel(
+            num_slots,
+            slot_dim,
+            sequence_length,
+            action_dim,
+            token_dim,
+            hidden_dim,
+            num_layers,
+            num_heads,
+            residual,
+            input_buffer_size,
+        ),
+        teacher_forcing,
+    )

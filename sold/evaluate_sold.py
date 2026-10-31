@@ -22,9 +22,9 @@ def get_checkpoint_files(checkpoint_path: str) -> List[str]:
         checkpoint_path = os.path.join(hydra.utils.get_original_cwd(), checkpoint_path)
 
     if os.path.isfile(checkpoint_path):
-        return [checkpoint_path] if checkpoint_path.endswith('.ckpt') else []
+        return [checkpoint_path] if checkpoint_path.endswith(".ckpt") else []
     elif os.path.isdir(checkpoint_path):
-        return [os.path.join(checkpoint_path, file) for file in os.listdir(checkpoint_path) if file.endswith('.ckpt')]
+        return [os.path.join(checkpoint_path, file) for file in os.listdir(checkpoint_path) if file.endswith(".ckpt")]
     else:
         raise ValueError(f"The path '{checkpoint_path}' is neither a valid file nor directory.")
 
@@ -49,17 +49,27 @@ def evaluate(cfg: DictConfig):
             checkpoint_videos_dir = os.path.join(videos_dir, checkpoint_filename)
             os.makedirs(checkpoint_videos_dir, exist_ok=True)
             episode = sold.runner.play_episode(mode="eval", render=render_high_res)
-            write_video(os.path.join(checkpoint_videos_dir, f"episode_obs_{episode_index}.mp4"),
-                        (torch.stack(episode["obs"]).permute(0, 2, 3, 1)), fps=10)
-            write_video(os.path.join(checkpoint_videos_dir, f"episode_high_res_{episode_index}.mp4"),
-                        (torch.stack(episode["rendered"]).permute(0, 2, 3, 1) * 255).to(torch.uint8), fps=10)
+            write_video(
+                os.path.join(checkpoint_videos_dir, f"episode_obs_{episode_index}.mp4"),
+                (torch.stack(episode["obs"]).permute(0, 2, 3, 1)),
+                fps=10,
+            )
+            write_video(
+                os.path.join(checkpoint_videos_dir, f"episode_high_res_{episode_index}.mp4"),
+                (torch.stack(episode["rendered"]).permute(0, 2, 3, 1) * 255).to(torch.uint8),
+                fps=10,
+            )
             episode_returns.append(sum(episode["reward"]))
             if "success" in episode:
                 successes.append(episode["success"])
 
         # Log return and success rate metrics.
         with open(metrics_filename, mode="a") as file:
-            record = {"step": sold.num_steps, "checkpoint": checkpoint, "episode_returns": episode_returns,}
+            record = {
+                "step": sold.num_steps,
+                "checkpoint": checkpoint,
+                "episode_returns": episode_returns,
+            }
             if len(successes) > 0:
                 record["success_rate"] = sum(successes) / len(successes)
             file.write(json.dumps(record) + "\n")

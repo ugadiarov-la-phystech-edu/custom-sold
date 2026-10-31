@@ -5,8 +5,9 @@ from envs.wrappers.time_limit import TimeLimit
 from typing import Optional, Tuple
 
 
-def make_env(name: str, image_size: Tuple[int, int], max_episode_steps: int, action_repeat: int,
-             seed: Optional[int] = None):
+def make_env(
+    name: str, image_size: Tuple[int, int], max_episode_steps: int, action_repeat: int, seed: Optional[int] = None
+):
     env = gym.make(name)
     if seed is not None:  # Without a seed, gym environments seed themselves randomly.
         env.seed(seed)

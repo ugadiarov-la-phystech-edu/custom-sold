@@ -57,7 +57,9 @@ def make_tiny_savi(image_size=(16, 16), num_slots=2, slot_dim=8, action_dim=2, a
 
     predictor_class = ActionConditionalTransformerPredictor if action_conditional else TransformerPredictor
     return SAVi(
-        corrector=Corrector(num_slots, slot_dim, feature_dim=8, num_iterations=1, num_initial_iterations=2, hidden_dim=8),
+        corrector=Corrector(
+            num_slots, slot_dim, feature_dim=8, num_iterations=1, num_initial_iterations=2, hidden_dim=8
+        ),
         predictor=predictor_class(slot_dim, action_dim, 2, 8),
         encoder=SaviCnnEncoder(tuple(image_size), [4, 4], [3, 3], [1, 1], feature_dim=8),
         decoder=SaviCnnDecoder(tuple(image_size), [4, 4], [3, 3], [1, 1], in_channels=slot_dim),
@@ -72,18 +74,47 @@ def tiny_sold_kwargs(env, autoencoder=None, **overrides):
     predictor = dict(token_dim=8, num_heads=2, num_layers=1, hidden_dim=16, num_mlp_layers=1)
     kwargs = dict(
         autoencoder=autoencoder if autoencoder is not None else make_tiny_savi(action_dim=env.action_space.shape[0]),
-        dynamics_predictor=functools.partial(make_ocvp_seq_dynamics_model, token_dim=8, hidden_dim=16, num_layers=1,
-                                             num_heads=2, residual=True, teacher_forcing=False),
+        dynamics_predictor=functools.partial(
+            make_ocvp_seq_dynamics_model,
+            token_dim=8,
+            hidden_dim=16,
+            num_layers=1,
+            num_heads=2,
+            residual=True,
+            teacher_forcing=False,
+        ),
         actor=functools.partial(GaussianPredictor, **predictor),
         critic=functools.partial(TwoHotPredictor, **predictor),
         reward_predictor=functools.partial(TwoHotPredictor, **predictor),
-        dynamics_learning_rate=1e-3, dynamics_grad_clip=3.0, actor_learning_rate=1e-3, actor_grad_clip=10.0,
-        critic_learning_rate=1e-3, critic_grad_clip=10.0, reward_learning_rate=1e-3, reward_grad_clip=10.0,
-        finetune_autoencoder=False, autoencoder_learning_rate=1e-3, autoencoder_grad_clip=0.05,
-        num_context=2, imagination_horizon=3, start_imagination_from_every=False,
-        actor_entropy_loss_weight=3e-4, actor_gradients="dynamics", return_lambda=0.95, discount_factor=0.96,
-        critic_ema_decay=0.98, env=env, max_steps=40, num_seed=10, update_freq=5, num_updates=1, eval_freq=20,
-        num_eval_episodes=2, batch_size=2, buffer_capacity=300, save_replay_buffer=False,
+        dynamics_learning_rate=1e-3,
+        dynamics_grad_clip=3.0,
+        actor_learning_rate=1e-3,
+        actor_grad_clip=10.0,
+        critic_learning_rate=1e-3,
+        critic_grad_clip=10.0,
+        reward_learning_rate=1e-3,
+        reward_grad_clip=10.0,
+        finetune_autoencoder=False,
+        autoencoder_learning_rate=1e-3,
+        autoencoder_grad_clip=0.05,
+        num_context=2,
+        imagination_horizon=3,
+        start_imagination_from_every=False,
+        actor_entropy_loss_weight=3e-4,
+        actor_gradients="dynamics",
+        return_lambda=0.95,
+        discount_factor=0.96,
+        critic_ema_decay=0.98,
+        env=env,
+        max_steps=40,
+        num_seed=10,
+        update_freq=5,
+        num_updates=1,
+        eval_freq=20,
+        num_eval_episodes=2,
+        batch_size=2,
+        buffer_capacity=300,
+        save_replay_buffer=False,
     )
     kwargs.update(overrides)
     return kwargs
@@ -91,6 +122,7 @@ def tiny_sold_kwargs(env, autoencoder=None, **overrides):
 
 def make_tiny_sold(env=None, **overrides):
     from train_sold import SOLDModule
+
     env = env if env is not None else fakes.make_fake_env()
     return SOLDModule(**tiny_sold_kwargs(env, **overrides))
 
@@ -116,9 +148,16 @@ def make_online_trainer(tmp_path, **kwargs):
     from utils.logging import ExtendedTensorBoardLogger
     from utils.training import OnlineProgressBar
 
-    params = dict(max_steps=-1, max_epochs=-1, enable_checkpointing=False, devices=1, accelerator="cpu",
-                  logger=ExtendedTensorBoardLogger(save_dir=str(tmp_path), name="logs"),
-                  callbacks=[OnlineProgressBar()], enable_model_summary=False)
+    params = dict(
+        max_steps=-1,
+        max_epochs=-1,
+        enable_checkpointing=False,
+        devices=1,
+        accelerator="cpu",
+        logger=ExtendedTensorBoardLogger(save_dir=str(tmp_path), name="logs"),
+        callbacks=[OnlineProgressBar()],
+        enable_model_summary=False,
+    )
     params.update(kwargs)
     return Trainer(**params)
 
@@ -127,8 +166,9 @@ def make_online_trainer(tmp_path, **kwargs):
 def make_episode(length, start=0, action_dim=2):
     """An episode in SOLD's format: obs[t], the action[t] that led to it and reward[t] (both NaN at t=0)."""
     obs = [torch.full((3, 2, 2), start + t, dtype=torch.uint8) for t in range(length)]
-    action = [torch.full((action_dim,), float("nan"))] + [torch.full((action_dim,), float(start + t))
-                                                           for t in range(1, length)]
+    action = [torch.full((action_dim,), float("nan"))] + [
+        torch.full((action_dim,), float(start + t)) for t in range(1, length)
+    ]
     reward = [torch.tensor(float("nan"))] + [torch.tensor(float(start + t)) for t in range(1, length)]
     return {"obs": obs, "action": action, "reward": reward}
 
@@ -139,9 +179,14 @@ def add_episode(buffer, episode):
         buffer.add_step({key: values[t] for key, values in episode.items()}, done=t == length - 1)
 
 
-
-def write_image_dataset(root: Path, save_format: str = "npz", num_episodes=(3, 2), episode_length: int = 7,
-                        image_size=(16, 16), action_dim: int = 2) -> Path:
+def write_image_dataset(
+    root: Path,
+    save_format: str = "npz",
+    num_episodes=(3, 2),
+    episode_length: int = 7,
+    image_size=(16, 16),
+    action_dim: int = 2,
+) -> Path:
     """Write a dataset in the layout produced by generate_dataset.py: root/<split>/<episode>/..."""
     from PIL import Image
 
@@ -151,8 +196,10 @@ def write_image_dataset(root: Path, save_format: str = "npz", num_episodes=(3, 2
             episode_dir = root / split / str(episode)
             episode_dir.mkdir(parents=True)
             images = rng.integers(0, 256, (episode_length, *image_size, 3), dtype=np.uint8)
-            data = {"actions": rng.uniform(-1, 1, (episode_length - 1, action_dim)).astype(np.float32),
-                    "rewards": rng.normal(size=episode_length - 1)}
+            data = {
+                "actions": rng.uniform(-1, 1, (episode_length - 1, action_dim)).astype(np.float32),
+                "rewards": rng.normal(size=episode_length - 1),
+            }
             if save_format == "png":
                 for index, image in enumerate(images):
                     Image.fromarray(image).save(episode_dir / f"{index}.png")

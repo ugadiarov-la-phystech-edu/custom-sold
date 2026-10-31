@@ -6,7 +6,6 @@ from typing import Any, Dict, List, Optional, Sequence, Union
 
 @dataclass
 class FieldType(ABC):
-
     @staticmethod
     @abstractmethod
     def is_compatible(data: Any) -> bool:
@@ -67,6 +66,7 @@ class Vector(TensorType):
 @dataclass
 class ColorImage(TensorType):
     """Describes color image tensors of shape [3, height, width]."""
+
     height: int
     width: int
     dtype: Union[torch.dtype, str] = field(init=False, repr=False)
@@ -90,10 +90,9 @@ class Fields(dict):
     """
 
     @classmethod
-    def from_episode(cls, episode: Dict[str, List]) -> 'Fields':
+    def from_episode(cls, episode: Dict[str, List]) -> "Fields":
         dic = {}
         for key, value in episode.items():
-
             if not isinstance(value, list) or len(value) == 0:
                 raise ValueError(f"Expected value at key '{key}' to be a list, but found {value}.")
 
@@ -135,7 +134,7 @@ class EpisodeDatasetInfoMixin:
         self.info.num_episodes += 1
         self.info.num_timesteps += len(next(iter(episode.values())))
         self.info.episode_lengths.append(len(next(iter(episode.values()))))
-        self.last_episode_return = sum(episode['reward'][1:])
+        self.last_episode_return = sum(episode["reward"][1:])
 
     def _update_stats_on_remove(self) -> None:
         self.info.num_episodes -= 1
@@ -172,5 +171,3 @@ class EpisodeDatasetInfoMixin:
     @property
     def fields(self) -> Fields:
         return self.info.fields
-
-

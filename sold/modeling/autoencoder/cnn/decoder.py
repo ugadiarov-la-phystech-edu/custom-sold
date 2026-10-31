@@ -17,11 +17,18 @@ class Decoder(nn.Module, ABC):
 
 
 class CnnDecoder(Decoder):
-    def __init__(self, embedding_dim: int, image_size: Tuple[int, int], num_channels: List[int],
-                 kernel_sizes: List[int], strides: List[int]) -> None:
+    def __init__(
+        self,
+        embedding_dim: int,
+        image_size: Tuple[int, int],
+        num_channels: List[int],
+        kernel_sizes: List[int],
+        strides: List[int],
+    ) -> None:
         super().__init__(image_size, 3)
-        assert len(num_channels) == len(kernel_sizes) == len(strides), \
+        assert len(num_channels) == len(kernel_sizes) == len(strides), (
             "num_channels, kernel_sizes, and strides must have the same length"
+        )
         self.image_size = image_size
         self.feature_map_size = torch.LongTensor(image_size)
         for stride in strides:
@@ -31,13 +38,21 @@ class CnnDecoder(Decoder):
 
         layers = []
         in_channels = num_channels[0]
-        for i, (out_channels, kernel, stride) in enumerate(zip(num_channels[1:] + [self.out_channels], kernel_sizes, strides)):
+        for i, (out_channels, kernel, stride) in enumerate(
+            zip(num_channels[1:] + [self.out_channels], kernel_sizes, strides)
+        ):
             padding, output_padding = self.get_same_padding(kernel, stride, 1)
 
-            layers.append(nn.ConvTranspose2d(
-                in_channels, out_channels, kernel_size=kernel, stride=stride,
-                padding=padding, output_padding=output_padding
-            ))
+            layers.append(
+                nn.ConvTranspose2d(
+                    in_channels,
+                    out_channels,
+                    kernel_size=kernel,
+                    stride=stride,
+                    padding=padding,
+                    output_padding=output_padding,
+                )
+            )
             is_last = i == len(num_channels) - 1
             layers.append(nn.Sigmoid() if is_last else nn.ReLU(inplace=False))
             in_channels = out_channels

@@ -7,8 +7,10 @@ from typing import Any, Dict, List, Tuple
 
 def instantiate_dataloaders(cfg: DictConfig) -> Tuple:
     datasets = [hydra.utils.instantiate(cfg, split=split) for split in ["train", "val"]]
-    dataloaders = [DataLoader(dataset, batch_size=cfg.batch_size, shuffle=(dataset.split == "train"),
-                              num_workers=cfg.num_workers) for dataset in datasets]
+    dataloaders = [
+        DataLoader(dataset, batch_size=cfg.batch_size, shuffle=(dataset.split == "train"), num_workers=cfg.num_workers)
+        for dataset in datasets
+    ]
     return *dataloaders, datasets[0].dataset_infos
 
 
@@ -21,8 +23,9 @@ def instantiate_many(cfg: DictConfig) -> List:
 
 
 def instantiate_trainer(cfg: DictConfig) -> Trainer:
-    return hydra.utils.instantiate(cfg.trainer, logger=instantiate_many(cfg.logger),
-                                   callbacks=instantiate_many(cfg.callbacks))
+    return hydra.utils.instantiate(
+        cfg.trainer, logger=instantiate_many(cfg.logger), callbacks=instantiate_many(cfg.callbacks)
+    )
 
 
 def fill_in_missing(cfg: DictConfig, infos: Dict[str, Any]):

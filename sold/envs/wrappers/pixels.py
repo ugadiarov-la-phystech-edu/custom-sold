@@ -21,10 +21,10 @@ class Pixels(gym.Wrapper):
 
     def _get_obs(self) -> np.ndarray:
         if self.renders_at_size:
-            image = self.env.render(mode='rgb_array', size=self.image_size)
+            image = self.env.render(mode="rgb_array", size=self.image_size)
         else:
             height, width = self.image_size
-            image = Image.fromarray(self.env.render(mode='rgb_array'))
+            image = Image.fromarray(self.env.render(mode="rgb_array"))
             image = np.array(image.resize((width, height)))  # PIL sizes are (width, height).
         return np.moveaxis(image, -1, 0)
 

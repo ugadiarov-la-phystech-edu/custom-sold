@@ -67,7 +67,7 @@ class PNGDataset(ImageDataset):
         self.episode_png_paths = []
         for dir_name in self.episode_dir_names:
             episode_dir = os.path.join(self.split_path, str(dir_name))
-            png_paths = list(glob.glob(os.path.join(episode_dir, '*.png')))
+            png_paths = list(glob.glob(os.path.join(episode_dir, "*.png")))
             png_paths.sort(key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
             self.episode_png_paths.append(png_paths)
 
@@ -83,7 +83,7 @@ class PNGDataset(ImageDataset):
             image = transforms.ToTensor()(image)[:3]
             image_sequence.append(image)
         image_sequence = torch.stack(image_sequence, dim=0)
-        action_sequence = torch.from_numpy(actions[start_index:start_index + self.sequence_length])
+        action_sequence = torch.from_numpy(actions[start_index : start_index + self.sequence_length])
         return image_sequence, action_sequence
 
 
@@ -96,9 +96,9 @@ class NPZDataset(ImageDataset):
         actions = self._actions_leading_to_frames(actions)
         start_index = self._random_start(len(images))
 
-        image_sequence = images[start_index:start_index + self.sequence_length]
-        image_sequence = (torch.from_numpy(image_sequence) / 255.).permute(0, 3, 1, 2)  # (sequence_length, 3, H, W)
-        action_sequence = torch.from_numpy(actions[start_index:start_index + self.sequence_length])
+        image_sequence = images[start_index : start_index + self.sequence_length]
+        image_sequence = (torch.from_numpy(image_sequence) / 255.0).permute(0, 3, 1, 2)  # (sequence_length, 3, H, W)
+        action_sequence = torch.from_numpy(actions[start_index : start_index + self.sequence_length])
         return image_sequence, action_sequence
 
 

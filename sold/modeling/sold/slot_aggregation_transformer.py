@@ -7,9 +7,20 @@ from typing import List, Optional, Tuple
 
 
 class SlotAggregationTransformer(nn.Module):
-    def __init__(self, attention_mask: AttentionMask, positional_encoding: PositionalEncoding, max_episode_steps: int,
-                 num_slots: int, slot_dim: int, token_dim: int, num_heads: int, num_layers: int, hidden_dim: int,
-                 num_register_tokens: int = 0, dropout: float = 0.0) -> None:
+    def __init__(
+        self,
+        attention_mask: AttentionMask,
+        positional_encoding: PositionalEncoding,
+        max_episode_steps: int,
+        num_slots: int,
+        slot_dim: int,
+        token_dim: int,
+        num_heads: int,
+        num_layers: int,
+        hidden_dim: int,
+        num_register_tokens: int = 0,
+        dropout: float = 0.0,
+    ) -> None:
         super().__init__()
         self.num_slots = num_slots
         self.num_register_tokens = num_register_tokens
@@ -17,12 +28,15 @@ class SlotAggregationTransformer(nn.Module):
         self.num_heads = num_heads
 
         self.transformer_encoder_blocks = nn.Sequential(
-            *[TransformerEncoderLayer(
-                d_model=self.token_dim,
-                nhead=self.num_heads,
-                dim_feedforward=hidden_dim,
-                dropout=dropout,
-            ) for _ in range(num_layers)]
+            *[
+                TransformerEncoderLayer(
+                    d_model=self.token_dim,
+                    nhead=self.num_heads,
+                    dim_feedforward=hidden_dim,
+                    dropout=dropout,
+                )
+                for _ in range(num_layers)
+            ]
         )
         # Add cls and register tokens
         self.out_and_register_tokens = nn.Parameter(torch.Tensor(1, 1, 1 + self.num_register_tokens, self.token_dim))
@@ -57,12 +71,13 @@ class SlotAggregationTransformer(nn.Module):
             output_tokens, weights = transformer_encoder_block.encode(output_tokens, attention_mask, return_attention)
             attention_weights.append(weights)
 
-        output_tokens = output_tokens.reshape(batch_size, sequence_length, -1, self.token_dim)[:, -(sequence_length-start):, -1]
+        output_tokens = output_tokens.reshape(batch_size, sequence_length, -1, self.token_dim)[
+            :, -(sequence_length - start) :, -1
+        ]
         return output_tokens, attention_weights
 
 
 class TransformerEncoderLayer(Module):
-
     def __init__(self, d_model: int, nhead: int, dim_feedforward: int, dropout: float = 0.0) -> None:
         super().__init__()
         self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
@@ -81,8 +96,9 @@ class TransformerEncoderLayer(Module):
     def forward(self, src: Tensor, src_mask: Optional[Tensor] = None) -> Tensor:
         return self.encode(src, src_mask)[0]
 
-    def encode(self, src: Tensor, src_mask: Optional[Tensor] = None,
-               return_attention: bool = False) -> Tuple[Tensor, Optional[Tensor]]:
+    def encode(
+        self, src: Tensor, src_mask: Optional[Tensor] = None, return_attention: bool = False
+    ) -> Tuple[Tensor, Optional[Tensor]]:
         """The layer's output and, with return_attention, its head-averaged attention weights (else None)."""
         x = src
         attention, weights = self._sa_block(self.norm1(x), src_mask, return_attention)
@@ -91,8 +107,9 @@ class TransformerEncoderLayer(Module):
         return x, weights
 
     # self-attention block
-    def _sa_block(self, x: Tensor, attn_mask: Optional[Tensor],
-                  need_weights: bool = False) -> Tuple[Tensor, Optional[Tensor]]:
+    def _sa_block(
+        self, x: Tensor, attn_mask: Optional[Tensor], need_weights: bool = False
+    ) -> Tuple[Tensor, Optional[Tensor]]:
         x, weights = self.self_attn(x, x, x, attn_mask=attn_mask, need_weights=need_weights)
         return self.dropout1(x), weights
 

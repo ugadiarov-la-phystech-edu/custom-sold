@@ -42,16 +42,26 @@ def test_color_image_is_height_width_channels_uint8():
 
 
 def test_fields_from_episode_infers_types():
-    episode = {"reward": [torch.tensor(1.0)], "action": [torch.zeros(2)],
-               "hwc": [torch.zeros(4, 5, 3, dtype=torch.uint8)], "obs": [torch.zeros(3, 4, 5, dtype=torch.uint8)]}
+    episode = {
+        "reward": [torch.tensor(1.0)],
+        "action": [torch.zeros(2)],
+        "hwc": [torch.zeros(4, 5, 3, dtype=torch.uint8)],
+        "obs": [torch.zeros(3, 4, 5, dtype=torch.uint8)],
+    }
     fields = Fields.from_episode(episode)
     assert type(fields["reward"]) is Scalar and type(fields["action"]) is Vector
     assert type(fields["hwc"]) is ColorImage and type(fields["obs"]) is TensorType
     assert fields["obs"].shape == (3, 4, 5)
 
 
-@pytest.mark.parametrize("episode, match", [({"x": []}, "to be a list"), ({"x": (torch.zeros(1),)}, "to be a list"),
-                                            ({"x": [np.zeros(1)]}, "Unsupported type")])
+@pytest.mark.parametrize(
+    "episode, match",
+    [
+        ({"x": []}, "to be a list"),
+        ({"x": (torch.zeros(1),)}, "to be a list"),
+        ({"x": [np.zeros(1)]}, "Unsupported type"),
+    ],
+)
 def test_fields_from_episode_errors(episode, match):
     with pytest.raises(ValueError, match=match):
         Fields.from_episode(episode)
@@ -71,6 +81,7 @@ def buffer(tmp_path):
 
 def test_ring_buffer_starts_empty(buffer, recwarn):
     from datasets.info import EpisodeDatasetInfoMixin
+
     assert buffer.is_empty and len(buffer) == 0 and buffer.fields is None
     assert EpisodeDatasetInfoMixin.is_empty.fget(buffer)  # Overridden by RingBufferDataset.
     assert buffer.average_episode_length == 0 and buffer.last_episode_return is None
@@ -145,8 +156,14 @@ def test_ring_buffer_files_and_load_from_disk_storage(buffer, tmp_path, caplog):
     assert sorted(p.name for p in (tmp_path / "rb").iterdir()) == ["action.dat", "obs.dat", "reward.dat"]
 
     restored = RingBufferDataset(capacity=1, batch_size=4, sequence_length=3, save_path=str(tmp_path / "copy"))
-    restored.load_from_disk_storage(str(tmp_path / "rb"), buffer.capacity, copy.deepcopy(buffer.info), buffer.head,
-                                    buffer.tail, deque(buffer.episode_boundaries))
+    restored.load_from_disk_storage(
+        str(tmp_path / "rb"),
+        buffer.capacity,
+        copy.deepcopy(buffer.info),
+        buffer.head,
+        buffer.tail,
+        deque(buffer.episode_boundaries),
+    )
     assert restored.capacity == 10 and restored.num_episodes == 1 and restored.tail == 4
     assert np.array_equal(restored.ring_buffer["obs"], buffer.ring_buffer["obs"])
     assert restored.sample()["obs"].shape == (4, 3, 3, 2, 2)
@@ -204,7 +221,6 @@ def test_ring_buffer_accepts_predefined_fields(tmp_path):
     assert buffer.ring_buffer["obs"].shape == (5, 3, 2, 2)
 
 
-
 # ---------------------------------------------------------------------------- image datasets
 @pytest.mark.parametrize("save_format, expected_class", [("png", PNGDataset), ("npz", NPZDataset)])
 def test_load_image_dataset_detects_format(tmp_path, save_format, expected_class):
@@ -229,7 +245,7 @@ def test_image_dataset_items(tmp_path, save_format):
     assert torch.isnan(actions[0]).all()
     assert torch.allclose(actions[1:], torch.from_numpy(expected["actions"][:3]))
     if save_format == "npz":
-        assert torch.allclose(images, torch.from_numpy(expected["images"][:4]).permute(0, 3, 1, 2) / 255.)
+        assert torch.allclose(images, torch.from_numpy(expected["images"][:4]).permute(0, 3, 1, 2) / 255.0)
 
     train = load_image_dataset(str(tmp_path), "run", "train", sequence_length=4)
     starts = set()
@@ -238,8 +254,11 @@ def test_image_dataset_items(tmp_path, save_format):
         np.random.seed(seed)
         _, actions = train[0]
         assert actions.shape == (4, 2)
-        start = 0 if torch.isnan(actions[0]).all() else \
-            next(s for s in range(1, 4) if np.allclose(train_actions[s - 1:s + 3], actions.numpy()))
+        start = (
+            0
+            if torch.isnan(actions[0]).all()
+            else next(s for s in range(1, 4) if np.allclose(train_actions[s - 1 : s + 3], actions.numpy()))
+        )
         starts.add(start)
     assert starts == {0, 1, 2, 3}  # Every window, including the last one (#14).
 
@@ -263,5 +282,5 @@ def test_random_crop_can_use_the_last_window(tmp_path):
     write_image_dataset(tmp_path / "run", "npz", episode_length=7)
     dataset = load_image_dataset(str(tmp_path), "run", "train", sequence_length=4)
     images = np.load(tmp_path / "run" / "train" / "0" / "episode.npz")["images"]
-    last_window = torch.from_numpy(images[3:7]).permute(0, 3, 1, 2) / 255.
+    last_window = torch.from_numpy(images[3:7]).permute(0, 3, 1, 2) / 255.0
     assert any(torch.allclose(dataset[0][0], last_window) for _ in range(200))

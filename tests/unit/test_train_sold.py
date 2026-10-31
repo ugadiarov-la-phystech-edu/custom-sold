@@ -46,8 +46,12 @@ def test_construction(tiny_sold):
 
 
 def _actor_loss(sold, imagination):
-    return sold.compute_actor_loss(imagination.lambda_returns, imagination.predicted_values_targ,
-                                   imagination.action_log_probs, imagination.action_entropies)
+    return sold.compute_actor_loss(
+        imagination.lambda_returns,
+        imagination.predicted_values_targ,
+        imagination.action_log_probs,
+        imagination.action_entropies,
+    )
 
 
 def test_critic_target_is_not_trained_by_gradients(tiny_sold):
@@ -64,8 +68,12 @@ def test_imagine_ahead_with_batch_size_one(tiny_sold):
     images, actions, _ = _batch(tiny_sold, batch_size=1)
     slots = tiny_sold.autoencoder(images, actions[:, 1:])["slots"].detach()
     imagination = tiny_sold.imagine_ahead(slots, actions)
-    assert (imagination.lambda_returns.shape == imagination.predicted_values_targ.shape
-            == imagination.action_log_probs.shape == (1, 3))
+    assert (
+        imagination.lambda_returns.shape
+        == imagination.predicted_values_targ.shape
+        == imagination.action_log_probs.shape
+        == (1, 3)
+    )
 
 
 def test_context_range():
@@ -86,7 +94,9 @@ def test_configure_optimizers(tiny_sold):
 def test_compute_lambda_returns_uses_the_configured_discount_and_lambda():
     sold = make_tiny_sold(discount_factor=0.9, return_lambda=0.5)
     rewards, values = torch.randn(4, 3), torch.randn(4, 3)
-    assert torch.equal(sold.compute_lambda_returns(rewards, values), rl.returns.lambda_returns(rewards, values, 0.9, 0.5))
+    assert torch.equal(
+        sold.compute_lambda_returns(rewards, values), rl.returns.lambda_returns(rewards, values, 0.9, 0.5)
+    )
 
 
 @pytest.mark.parametrize("gradients", ["dynamics", "reinforce"])
@@ -95,8 +105,9 @@ def test_compute_actor_loss_normalizes_with_the_return_moments(gradients):
     returns, values, log_probs, entropies = torch.randn(2, 3), torch.randn(2, 3), torch.randn(2, 3), torch.rand(2, 3)
     moments = copy.deepcopy(sold.return_moments)
     losses = sold.compute_actor_loss(returns, values, log_probs, entropies)
-    expected = rl.losses.actor_loss(returns, values, log_probs, entropies, sold.discounts, *moments(returns[:, :-1]),
-                                    gradients, 0.01)
+    expected = rl.losses.actor_loss(
+        returns, values, log_probs, entropies, sold.discounts, *moments(returns[:, :-1]), gradients, 0.01
+    )
     assert losses.keys() == expected.keys() and all(torch.equal(losses[k], expected[k]) for k in losses)
     assert torch.equal(sold.return_moments.low, moments.low)  # The running percentiles were updated.
 
@@ -162,8 +173,14 @@ def _log_visualizations(sold):
 
 
 def test_visualizations_after_evaluation(tiny_sold):
-    assert _log_visualizations(tiny_sold) == ["autoencoder_reconstruction", "dynamics_prediction", "reward_prediction",
-                                              "reward_predictor_attention", "latent_imagination", "actor_attention"]
+    assert _log_visualizations(tiny_sold) == [
+        "autoencoder_reconstruction",
+        "dynamics_prediction",
+        "reward_prediction",
+        "reward_predictor_attention",
+        "latent_imagination",
+        "actor_attention",
+    ]
 
 
 def test_visualizations_without_slot_masks():
@@ -171,9 +188,10 @@ def test_visualizations_without_slot_masks():
     from modeling.autoencoder.cnn import CnnDecoder, CnnEncoder
     from modeling.autoencoder.cnn.autoencoder import Cnn
 
-    autoencoder = Cnn(CnnEncoder([4, 4], [3, 3], [2, 2]),
-                      functools.partial(CnnDecoder, image_size=(16, 16), num_channels=[4, 4], kernel_sizes=[3, 3],
-                                        strides=[2, 2]))
+    autoencoder = Cnn(
+        CnnEncoder([4, 4], [3, 3], [2, 2]),
+        functools.partial(CnnDecoder, image_size=(16, 16), num_channels=[4, 4], kernel_sizes=[3, 3], strides=[2, 2]),
+    )
     names = _log_visualizations(make_tiny_sold(autoencoder=autoencoder))
     # No attention figures without slot masks.
     assert names == ["autoencoder_reconstruction", "dynamics_prediction", "reward_prediction", "latent_imagination"]
@@ -212,7 +230,8 @@ def test_select_action_modes(tiny_sold):
 def test_select_action_clamps_with_first_dimension_bounds():
     env = fakes.make_fake_env()
     env.unwrapped.action_space = env.action_space = type(env.action_space)(
-        low=-0.1, high=0.1, shape=(2,), dtype=env.action_space.dtype)
+        low=-0.1, high=0.1, shape=(2,), dtype=env.action_space.dtype
+    )
     sold = make_tiny_sold(env)
     obs = torch.zeros(3, 16, 16, dtype=torch.uint8)
     for _ in range(5):
@@ -228,8 +247,9 @@ def test_entropy_bonus_uses_the_discount_of_its_own_step():
     imagination = sold.imagine_ahead(slots, actions)
     assert imagination.action_entropies.shape == (2, 3, 1)  # One entropy per (sample, step), as imagined.
     entropies = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]).unsqueeze(-1)
-    losses = sold.compute_actor_loss(imagination.lambda_returns, imagination.predicted_values_targ,
-                                     imagination.action_log_probs, entropies)
+    losses = sold.compute_actor_loss(
+        imagination.lambda_returns, imagination.predicted_values_targ, imagination.action_log_probs, entropies
+    )
     expected = -sold.actor_entropy_loss_weight * torch.mean(sold.discounts * entropies.squeeze(-1))
     assert torch.allclose(losses["actor_entropy_loss"], expected), "each entropy is weighted by the mean discount"
 
@@ -244,8 +264,10 @@ def test_imagined_actions_stay_within_the_action_space():
     slots = sold.autoencoder(images, actions[:, 1:])["slots"].detach()
     used = []
     original = sold.dynamics_predictor.predict_slots
-    sold.dynamics_predictor.predict_slots = lambda slots, actions, **kwargs: (used.append(actions[:, -1].detach()),
-                                                                              original(slots, actions, **kwargs))[1]
+    sold.dynamics_predictor.predict_slots = lambda slots, actions, **kwargs: (
+        used.append(actions[:, -1].detach()),
+        original(slots, actions, **kwargs),
+    )[1]
     sold.imagine_ahead(slots, actions)
     imagined = torch.cat(used)
     assert imagined.abs().max() <= 1.0, f"dynamics model receives actions up to {imagined.abs().max():.2f}"
@@ -255,7 +277,8 @@ def test_imagined_actions_stay_within_the_action_space():
 def test_actions_are_clamped_per_dimension():
     env = fakes.make_fake_env()
     env.unwrapped.action_space = env.action_space = type(env.action_space)(
-        low=np.array([-1.0, -0.1], np.float32), high=np.array([1.0, 0.1], np.float32))
+        low=np.array([-1.0, -0.1], np.float32), high=np.array([1.0, 0.1], np.float32)
+    )
     sold = make_tiny_sold(env)
     obs = torch.zeros(3, 16, 16, dtype=torch.uint8)
     actions = torch.stack([sold.select_action(obs, is_first=True, mode="train") for _ in range(50)])
@@ -269,14 +292,17 @@ def test_autoencoder_optimizer_state_is_checkpointed(tmp_path):
     trainer.fit(sold)
     checkpoint = torch.load(next((Path(trainer.logger.log_dir) / "checkpoints").glob("*.ckpt")), weights_only=False)
     saved = sum(len(group["params"]) for state in checkpoint["optimizer_states"] for group in state["param_groups"])
-    expected = sum(len(list(module.parameters())) for module in
-                   [sold.dynamics_predictor, sold.reward_predictor, sold.actor, sold.critic, sold.autoencoder])
+    expected = sum(
+        len(list(module.parameters()))
+        for module in [sold.dynamics_predictor, sold.reward_predictor, sold.actor, sold.critic, sold.autoencoder]
+    )
     assert saved == expected
 
 
 # BUGS_AND_PITFALLS.md #17 (fixed).
 def test_no_autoencoder_graph_without_finetuning(tmp_path, monkeypatch):
     import train_sold
+
     recorded = []
     original = train_sold.reconstruction_loss
 

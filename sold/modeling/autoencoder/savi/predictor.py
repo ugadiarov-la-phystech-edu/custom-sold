@@ -21,7 +21,7 @@ def init_xavier_(model: nn.Module):
 
 
 class MetaAttention(nn.Module):
-    def __init__(self, emb_dim, num_heads=1, dropout=0., out_dim=None, **kwargs):
+    def __init__(self, emb_dim, num_heads=1, dropout=0.0, out_dim=None, **kwargs):
         assert num_heads >= 1
         assert emb_dim % num_heads == 0, "Embedding dim. must be divisible by number of heads..."
         super().__init__()
@@ -35,19 +35,17 @@ class MetaAttention(nn.Module):
         self.v = nn.Linear(emb_dim, emb_dim, bias=False)
         self.drop = nn.Dropout(dropout)
 
-        self.out_projection = nn.Sequential(
-                nn.Linear(emb_dim, out_dim, bias=False)
-            )
+        self.out_projection = nn.Sequential(nn.Linear(emb_dim, out_dim, bias=False))
         self.attention_masks = None
         return
 
     def attention(self, query, key, value, dim_head):
-        scale = dim_head ** -0.5  # 1/sqrt(d_k)
-        dots = torch.einsum('b i d , b j d -> b i j', query, key) * scale  # Q * K.T / sqrt(d_k)
+        scale = dim_head**-0.5  # 1/sqrt(d_k)
+        dots = torch.einsum("b i d , b j d -> b i j", query, key) * scale  # Q * K.T / sqrt(d_k)
         attention = dots.softmax(dim=-1)
         self.attention_masks = attention
         attention = self.drop(attention)
-        vect = torch.einsum('b i d , b d j -> b i j', attention, value)  # Att * V
+        vect = torch.einsum("b i d , b d j -> b i j", attention, value)  # Att * V
         return vect
 
     def get_attention_masks(self, reshape=None):
@@ -57,12 +55,8 @@ class MetaAttention(nn.Module):
 
 
 class MultiHeadSelfAttention(MetaAttention):
-    def __init__(self, emb_dim, num_heads=8, dropout=0.):
-        super().__init__(
-                emb_dim=emb_dim,
-                num_heads=num_heads,
-                dropout=dropout
-            )
+    def __init__(self, emb_dim, num_heads=8, dropout=0.0):
+        super().__init__(emb_dim=emb_dim, num_heads=num_heads, dropout=dropout)
         return
 
     def forward(self, x, **kwargs):

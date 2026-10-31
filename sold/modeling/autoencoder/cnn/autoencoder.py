@@ -26,7 +26,9 @@ class Cnn(Autoencoder):
     def slot_dim(self) -> int:
         return self.embedding_dim
 
-    def encode(self, images: torch.Tensor, actions: torch.Tensor, prior_slots: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def encode(
+        self, images: torch.Tensor, actions: torch.Tensor, prior_slots: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         batch_size, sequence_length, _, _, _ = images.size()
         images = images.flatten(0, 1)
         embeddings = self.encoder(images).flatten(start_dim=1)
@@ -35,6 +37,7 @@ class Cnn(Autoencoder):
 
     def decode(self, slots: torch.Tensor) -> Dict[str, torch.Tensor]:
         batch_size, sequence_length, num_slots, slot_dim = slots.size()
-        reconstructions = self.decoder(slots.flatten(end_dim=1)).view(batch_size, sequence_length, 3, *self.decoder.image_size)
+        reconstructions = self.decoder(slots.flatten(end_dim=1)).view(
+            batch_size, sequence_length, 3, *self.decoder.image_size
+        )
         return {"reconstructions": reconstructions.clamp(0, 1)}
-

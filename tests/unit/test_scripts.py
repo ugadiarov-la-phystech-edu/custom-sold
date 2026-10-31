@@ -56,8 +56,14 @@ def _loader():
 
 def test_autoencoder_fit_and_load_checkpoint(tmp_path):
     module = _autoencoder_module()
-    trainer = Trainer(max_epochs=1, accelerator="cpu", logger=False, enable_checkpointing=False,
-                      enable_progress_bar=False, enable_model_summary=False)
+    trainer = Trainer(
+        max_epochs=1,
+        accelerator="cpu",
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+    )
     trainer.fit(module, _loader(), _loader())
     assert trainer.callback_metrics["valid_loss"] == trainer.callback_metrics["valid/reconstruction_loss"]
     assert "train/reconstruction_loss" in trainer.callback_metrics
@@ -89,12 +95,19 @@ def test_savi_checkpoints_saved_on_gpu_load_on_cpu(tmp_path):
     assert next(autoencoder.parameters()).device.type == "cpu", "a CPU-only machine could not load this checkpoint"
 
 
-
 # ------------------------------------------------------------------------------- generate_dataset
 def _dataset_cfg(save_format):
-    return OmegaConf.create({"save_format": save_format,
-                             "env": {"_target_": "tests.fakes.make_fake_env", "image_size": [16, 16],
-                                     "max_episode_steps": 5, "action_repeat": 1}})
+    return OmegaConf.create(
+        {
+            "save_format": save_format,
+            "env": {
+                "_target_": "tests.fakes.make_fake_env",
+                "image_size": [16, 16],
+                "max_episode_steps": 5,
+                "action_repeat": 1,
+            },
+        }
+    )
 
 
 def test_save_episode_png(tmp_path):
@@ -124,8 +137,13 @@ def test_save_episode_rejects_unknown_format(tmp_path):
 # BUGS_AND_PITFALLS.md #13 (fixed).
 def test_savi_pretraining_uses_the_action_that_led_to_the_next_frame(tmp_path):
     from datasets.image import NPZDataset
-    cfg = OmegaConf.create({"save_format": "npz", "env": {"_target_": "tests.fakes.make_fake_env",
-                                                          "max_episode_steps": 6, "action_repeat": 1}})
+
+    cfg = OmegaConf.create(
+        {
+            "save_format": "npz",
+            "env": {"_target_": "tests.fakes.make_fake_env", "max_episode_steps": 6, "action_repeat": 1},
+        }
+    )
     (tmp_path / "run" / "val").mkdir(parents=True)
     generate_dataset.save_episode(str(tmp_path / "run" / "val" / "0"), cfg)
     taken = np.load(tmp_path / "run" / "val" / "0" / "episode.npz")["actions"]  # taken[t] moves frame t -> t+1.
@@ -135,7 +153,9 @@ def test_savi_pretraining_uses_the_action_that_led_to_the_next_frame(tmp_path):
     used = []
     original = savi.predictor.forward
     savi.predictor.forward = lambda slots, actions: (used.append(actions[0].clone()), original(slots, actions))[1]
-    AutoencoderModule(savi, functools.partial(torch.optim.Adam)).compute_reconstruction_loss(images[None], actions[None])
+    AutoencoderModule(savi, functools.partial(torch.optim.Adam)).compute_reconstruction_loss(
+        images[None], actions[None]
+    )
     for t in range(3):  # The predictor turns the slots of frame t into a prediction for frame t + 1.
         assert torch.allclose(used[t], torch.from_numpy(taken[t])), f"step {t} uses the action of step {t + 1}"
 
@@ -147,8 +167,10 @@ def test_get_checkpoint_files(tmp_path, monkeypatch):
     (tmp_path / "notes.txt").write_text("x")
     assert evaluate_sold.get_checkpoint_files(str(tmp_path / "a.ckpt")) == [str(tmp_path / "a.ckpt")]
     assert evaluate_sold.get_checkpoint_files(str(tmp_path / "notes.txt")) == []
-    assert sorted(evaluate_sold.get_checkpoint_files(str(tmp_path))) == [str(tmp_path / "a.ckpt"),
-                                                                          str(tmp_path / "b.ckpt")]
+    assert sorted(evaluate_sold.get_checkpoint_files(str(tmp_path))) == [
+        str(tmp_path / "a.ckpt"),
+        str(tmp_path / "b.ckpt"),
+    ]
     with pytest.raises(ValueError, match="neither a valid file nor directory"):
         evaluate_sold.get_checkpoint_files(str(tmp_path / "missing"))
     monkeypatch.setattr(evaluate_sold.hydra.utils, "get_original_cwd", lambda: str(tmp_path))
@@ -159,8 +181,11 @@ def test_render_high_res(monkeypatch):
     env = make_tiny_sold().env
     render_sizes = []
     original_render = env.unwrapped.render
-    monkeypatch.setattr(env.unwrapped, "render",
-                        lambda mode="rgb_array", size=None: render_sizes.append(size) or original_render(mode, (64, 48)))
+    monkeypatch.setattr(
+        env.unwrapped,
+        "render",
+        lambda mode="rgb_array", size=None: render_sizes.append(size) or original_render(mode, (64, 48)),
+    )
     frame = evaluate_sold.render_high_res(env)
     assert render_sizes == [(1024, 1024)]
     assert frame.shape == (3, 64, 48) and frame.dtype == torch.float32 and frame.max() <= 1.0
@@ -171,30 +196,49 @@ def test_evaluation_updates_the_last_action():
     sold = make_tiny_sold()
     seen = []
     original = sold.autoencoder.encode
-    sold.autoencoder.encode = lambda images, actions, prior_slots=None: (seen.append(actions.clone()),
-                                                                          original(images, actions, prior_slots))[1]
+    sold.autoencoder.encode = lambda images, actions, prior_slots=None: (
+        seen.append(actions.clone()),
+        original(images, actions, prior_slots),
+    )[1]
     sold.runner.play_episode(mode="eval")  # As evaluate_sold.py plays its episodes.
     assert not torch.isnan(seen[-1]).any(), "the SAVi encoder still receives the initial NaN action"
 
 
 # ------------------------------------------------------------------------------------ presets
-_PRESET_COMMON = ["model.autoencoder.checkpoint_path=../checkpoints/autoencoder/savi/push_red/latest.ckpt",
-                  "model.actor.num_layers=4", "model.critic.num_layers=4", "model.reward_predictor.num_layers=4",
-                  "model.max_steps=20000000", "model.eval_freq=10000", "model.num_eval_episodes=30",
-                  "model.save_replay_buffer=False"]
+_PRESET_COMMON = [
+    "model.autoencoder.checkpoint_path=../checkpoints/autoencoder/savi/push_red/latest.ckpt",
+    "model.actor.num_layers=4",
+    "model.critic.num_layers=4",
+    "model.reward_predictor.num_layers=4",
+    "model.max_steps=20000000",
+    "model.eval_freq=10000",
+    "model.num_eval_episodes=30",
+    "model.save_replay_buffer=False",
+]
 
 
-@pytest.mark.parametrize("preset, overrides", [
-    ("push_red", ["experiment=push_red_4layers_savi8", "environment@model.env=push_red"]),
-    ("pick_red_frozen", ["experiment=pick_red_4layers_savi8_frozen", "environment@model.env=pick_red"]),
-    ("pick_red_finetune", ["experiment=pick_red_4layers_savi8_finetune", "environment@model.env=pick_red",
-                           "model.finetune_autoencoder=True", "model.autoencoder_learning_rate=0.00003"]),
-])
+@pytest.mark.parametrize(
+    "preset, overrides",
+    [
+        ("push_red", ["experiment=push_red_4layers_savi8", "environment@model.env=push_red"]),
+        ("pick_red_frozen", ["experiment=pick_red_4layers_savi8_frozen", "environment@model.env=pick_red"]),
+        (
+            "pick_red_finetune",
+            [
+                "experiment=pick_red_4layers_savi8_finetune",
+                "environment@model.env=pick_red",
+                "model.finetune_autoencoder=True",
+                "model.autoencoder_learning_rate=0.00003",
+            ],
+        ),
+    ],
+)
 def test_presets_equal_the_overrides_of_the_training_scripts(preset, overrides):
     """configs/preset/ replaces the remote training scripts' command-line overrides."""
     with initialize_config_dir(config_dir=str(CONFIGS_DIR), version_base=None):
-        assert compose("train_sold", overrides=[f"preset={preset}"]) == compose("train_sold",
-                                                                                overrides=overrides + _PRESET_COMMON)
+        assert compose("train_sold", overrides=[f"preset={preset}"]) == compose(
+            "train_sold", overrides=overrides + _PRESET_COMMON
+        )
 
 
 # ---------------------------------------------------------------------------------- all scripts
@@ -233,4 +277,3 @@ assert list(warnings.filters) == filters, [f for f in warnings.filters if f not 
     environ["PYTHONPATH"] = str(SOLD_DIR)  # The repository root is the working directory.
     result = subprocess.run([sys.executable, "-c", probe], cwd=REPO_DIR, env=environ, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr[-2000:]
-

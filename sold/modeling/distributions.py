@@ -33,7 +33,7 @@ class TwoHotEncodingDistribution:
         self.transfwd = transfwd
         self.transbwd = transbwd
         self._batch_shape = logits.shape[: len(logits.shape) - dims]
-        self._event_shape = logits.shape[len(logits.shape) - dims: -1] + (1,)
+        self._event_shape = logits.shape[len(logits.shape) - dims : -1] + (1,)
 
     @property
     def mean(self) -> Tensor:
@@ -62,8 +62,8 @@ class TwoHotEncodingDistribution:
         weight_below = dist_to_above / total
         weight_above = dist_to_below / total
         target = (
-              F.one_hot(below, len(self.bins)) * weight_below[..., None]
-              + F.one_hot(above, len(self.bins)) * weight_above[..., None]
+            F.one_hot(below, len(self.bins)) * weight_below[..., None]
+            + F.one_hot(above, len(self.bins)) * weight_above[..., None]
         ).squeeze(-2)
         log_pred = self.logits - torch.logsumexp(self.logits, dim=-1, keepdims=True)
         return (target * log_pred).sum(dim=self.dims)

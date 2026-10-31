@@ -50,7 +50,7 @@ class FakePixelEnv(gym.Env):
         row = int((self.position[1] + 1) / 2 * (height - 1))
         col = int((self.position[0] + 1) / 2 * (width - 1))
         image[..., 2] = (self.t * 20) % 256
-        image[max(row - 1, 0):row + 2, max(col - 1, 0):col + 2, 0] = 255
+        image[max(row - 1, 0) : row + 2, max(col - 1, 0) : col + 2, 0] = 255
         return image
 
     def close(self):
@@ -64,6 +64,7 @@ if "FakePixel-v0" not in gym.envs.registry.env_specs:
 def make_fake_env(image_size=(16, 16), max_episode_steps: int = 8, action_repeat: int = 1, seed=None, **env_kwargs):
     """The real SOLD wrapper stack (suite 'gym') around FakePixelEnv."""
     from envs import make_env
+
     env = make_env("gym", "FakePixel-v0", tuple(image_size), max_episode_steps, action_repeat, seed)
     for key, value in env_kwargs.items():
         setattr(env.unwrapped, key, value)
@@ -87,7 +88,13 @@ class _TimeStep(namedtuple("TimeStep", ["step_type", "reward", "discount", "obse
 
 class BoundedArray:
     def __init__(self, shape, dtype, minimum, maximum, name=None):
-        self.shape, self.dtype, self.minimum, self.maximum, self.name = tuple(shape), np.dtype(dtype), minimum, maximum, name
+        self.shape, self.dtype, self.minimum, self.maximum, self.name = (
+            tuple(shape),
+            np.dtype(dtype),
+            minimum,
+            maximum,
+            name,
+        )
 
 
 class _ShapelessSpec:
@@ -156,7 +163,9 @@ class FakeActionScaleWrapper:
         return getattr(self._env, name)
 
 
-def install_fake_dm_control(monkeypatch, tasks=(("cartpole", "swingup"), ("ball_in_cup", "catch"), ("quadruped", "walk"))):
+def install_fake_dm_control(
+    monkeypatch, tasks=(("cartpole", "swingup"), ("ball_in_cup", "catch"), ("quadruped", "walk"))
+):
     """Install fake dm_env and dm_control modules; returns the list of FakeDmEnv instances loaded."""
     loaded = []
 
@@ -183,9 +192,13 @@ def install_fake_dm_control(monkeypatch, tasks=(("cartpole", "swingup"), ("ball_
     dm_control = types.ModuleType("dm_control")
     dm_control.suite = suite
 
-    for name, module in {"dm_env": dm_env, "dm_control": dm_control, "dm_control.suite": suite,
-                         "dm_control.suite.wrappers": wrappers,
-                         "dm_control.suite.wrappers.action_scale": action_scale}.items():
+    for name, module in {
+        "dm_env": dm_env,
+        "dm_control": dm_control,
+        "dm_control.suite": suite,
+        "dm_control.suite.wrappers": wrappers,
+        "dm_control.suite.wrappers.action_scale": action_scale,
+    }.items():
         monkeypatch.setitem(sys.modules, name, module)
     monkeypatch.delitem(sys.modules, "envs.from_dmcontrol", raising=False)
     return loaded

@@ -11,7 +11,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 def save_episode(path: str, cfg: DictConfig) -> None:
     def save_image(image: torch.Tensor) -> None:
         if cfg.save_format == "png":
-            ToPILImage()(image).save(os.path.join(path, f'{step_count}.png'))
+            ToPILImage()(image).save(os.path.join(path, f"{step_count}.png"))
         elif cfg.save_format == "npz":
             images.append(np.array(ToPILImage()(image)))
         else:
@@ -34,7 +34,7 @@ def save_episode(path: str, cfg: DictConfig) -> None:
     episode_dict = {"actions": np.stack(actions), "rewards": np.array(rewards)}
     if cfg.save_format == "npz":
         episode_dict["images"] = np.stack(images)
-    np.savez_compressed(os.path.join(path, 'episode.npz'), **episode_dict)
+    np.savez_compressed(os.path.join(path, "episode.npz"), **episode_dict)
 
 
 @hydra.main(config_path="../configs", config_name="generate_dataset", version_base=None)

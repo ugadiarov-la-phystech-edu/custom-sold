@@ -32,9 +32,11 @@ class EpisodeDataset(EpisodeDatasetInfoMixin, ABC):
             self._initialize_from_fields(self.info.fields)
 
     def __repr__(self) -> str:
-        summary = (f"{self.__class__.__name__}("
-                   f"\n    num_episodes: {self.num_episodes}"
-                   f"\n    num_timesteps: {self.num_timesteps}")
+        summary = (
+            f"{self.__class__.__name__}("
+            f"\n    num_episodes: {self.num_episodes}"
+            f"\n    num_timesteps: {self.num_timesteps}"
+        )
         summary += f"\n    fields: {list(self.fields.keys())} \n)" if self.fields else "\n    fields: None\n)"
         return summary
 
@@ -153,8 +155,9 @@ class RingBufferDataset(EpisodeDataset):
         if self.sequence_length is None:
             viable_episode_indices = torch.arange(self.num_episodes)
         else:
-            viable_episode_indices = torch.tensor([i for i in range(self.num_episodes) if
-                                                   self.episode_lengths[i] >= self.sequence_length])
+            viable_episode_indices = torch.tensor(
+                [i for i in range(self.num_episodes) if self.episode_lengths[i] >= self.sequence_length]
+            )
 
         # Sample random episodes.
         episode_indices = viable_episode_indices[torch.randint(len(viable_episode_indices), (self.batch_size,))]
@@ -163,8 +166,9 @@ class RingBufferDataset(EpisodeDataset):
         selected_boundaries = torch.tensor([self.episode_boundaries[i] for i in episode_indices])
 
         # Compute maximum offset that can be used for each sequence.
-        max_offsets = torch.remainder(
-            selected_boundaries[:, 1] - selected_boundaries[:, 0], self.capacity) - self.sequence_length
+        max_offsets = (
+            torch.remainder(selected_boundaries[:, 1] - selected_boundaries[:, 0], self.capacity) - self.sequence_length
+        )
         offsets = ((max_offsets + 1) * torch.rand(self.batch_size)).long()  # Uniform over 0..max_offset inclusive.
 
         # Sample start indices for each sequence.
@@ -178,13 +182,16 @@ class RingBufferDataset(EpisodeDataset):
     @property
     def is_empty(self) -> bool:
         if self.num_episodes > 0:
-            viable_episode_indices = [i for i in range(self.num_episodes) if
-                                      self.episode_lengths[i] >= self.sequence_length]
+            viable_episode_indices = [
+                i for i in range(self.num_episodes) if self.episode_lengths[i] >= self.sequence_length
+            ]
             if len(viable_episode_indices) > 0:
                 return False
             else:
-                warnings.warn(f"Episodes have been stored to the buffer, but none are of sufficient length for sampling "
-                              f"sequence length {self.sequence_length}.")
+                warnings.warn(
+                    f"Episodes have been stored to the buffer, but none are of sufficient length for sampling "
+                    f"sequence length {self.sequence_length}."
+                )
         return True
 
     def _initialize_from_fields(self, fields: Fields, mode: str = "w+") -> None:
@@ -200,8 +207,9 @@ class RingBufferDataset(EpisodeDataset):
         total_bytes = bytes_per_step * self.capacity
         logger.info("Total estimated replay buffer size (GB): %.2f", total_bytes / 1e9)
 
-    def load_from_disk_storage(self, load_path: str, capacity: int, info: EpisodeDatasetInfo, head: int, tail: int,
-                               episode_boundaries: deque) -> None:
+    def load_from_disk_storage(
+        self, load_path: str, capacity: int, info: EpisodeDatasetInfo, head: int, tail: int, episode_boundaries: deque
+    ) -> None:
         self.capacity = capacity
         self.info = info
         self.head = head

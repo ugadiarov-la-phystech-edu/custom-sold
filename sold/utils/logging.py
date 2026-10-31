@@ -30,8 +30,11 @@ class LoggingStepMixin(ABC):
     def log(self, name: str, value: Union[torch.Tensor, float], *args, **kwargs) -> None:
         """Log a scalar; tensors become numbers only when written, not on every call."""
         if isinstance(self.logger, ExtendedTensorBoardLogger):
-            if (kwargs.get("logger", True) and self.trainer.is_last_batch
-                    and self.logging_step - self.last_logging_step[name] >= self.max_logging_freq):
+            if (
+                kwargs.get("logger", True)
+                and self.trainer.is_last_batch
+                and self.logging_step - self.last_logging_step[name] >= self.max_logging_freq
+            ):
                 self.last_logging_step[name] = self.logging_step
                 # Through the default float dtype, as in LightningModule.log (45 is written as 45.0).
                 tensor = value if torch.is_tensor(value) else torch.tensor(value, dtype=torch.get_default_dtype())
@@ -54,26 +57,21 @@ class LoggingStepMixin(ABC):
             return  # Scalars are only written after the epoch's last batch; skip copying gradients.
         for model_name in model_names:
             model = getattr(self, model_name)
-            grads = [
-                param.grad.detach().flatten()
-                for param in model.parameters()
-                if param.grad is not None
-            ]
+            grads = [param.grad.detach().flatten() for param in model.parameters() if param.grad is not None]
             self.log(f"gradients/{model_name}", torch.cat(grads).norm())
 
 
 class ExtendedTensorBoardLogger(TensorBoardLogger):
-
     def __init__(
-            self,
-            save_dir: _PATH,
-            name: Optional[str] = "lightning_logs",
-            version: Optional[Union[int, str]] = None,
-            log_graph: bool = False,
-            default_hp_metric: bool = True,
-            prefix: str = "",
-            sub_dir: Optional[_PATH] = None,
-            **kwargs: Any,
+        self,
+        save_dir: _PATH,
+        name: Optional[str] = "lightning_logs",
+        version: Optional[Union[int, str]] = None,
+        log_graph: bool = False,
+        default_hp_metric: bool = True,
+        prefix: str = "",
+        sub_dir: Optional[_PATH] = None,
+        **kwargs: Any,
     ):
         super().__init__(save_dir, name, version, log_graph, default_hp_metric, prefix, sub_dir, **kwargs)
 
@@ -115,5 +113,3 @@ class ExtendedTensorBoardLogger(TensorBoardLogger):
         self.experiment.add_video(name, np.expand_dims(video.cpu().numpy(), 0), global_step=step)
         name = name.replace("/", "_")  # Turn tensorboard grouping into valid file name.
         write_video(os.path.join(self.save_dirs["videos"], name) + f"-step={step}.mp4", video.permute(0, 2, 3, 1), fps)
-
-

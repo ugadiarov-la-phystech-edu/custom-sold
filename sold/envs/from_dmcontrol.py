@@ -61,11 +61,9 @@ class ActionDTypeWrapper(dm_env.Environment):
     def __init__(self, env, dtype):
         self._env = env
         wrapped_action_spec = env.action_spec()
-        self._action_spec = specs.BoundedArray(wrapped_action_spec.shape,
-                                               dtype,
-                                               wrapped_action_spec.minimum,
-                                               wrapped_action_spec.maximum,
-                                               'action')
+        self._action_spec = specs.BoundedArray(
+            wrapped_action_spec.shape, dtype, wrapped_action_spec.minimum, wrapped_action_spec.maximum, "action"
+        )
 
     def step(self, action):
         action = action.astype(self._env.action_spec().dtype)
@@ -100,11 +98,13 @@ class ExtendedTimeStepWrapper(dm_env.Environment):
         if action is None:
             action_spec = self.action_spec()
             action = np.zeros(action_spec.shape, dtype=action_spec.dtype)
-        return ExtendedTimeStep(observation=time_step.observation,
-                                step_type=time_step.step_type,
-                                action=action,
-                                reward=time_step.reward or 0.0,
-                                discount=time_step.discount or 1.0)
+        return ExtendedTimeStep(
+            observation=time_step.observation,
+            step_type=time_step.step_type,
+            action=action,
+            reward=time_step.reward or 0.0,
+            discount=time_step.discount or 1.0,
+        )
 
     def observation_spec(self):
         return self._env.observation_spec()
@@ -128,20 +128,15 @@ class TimeStepToGymWrapper:
         obs_shp = (int(np.sum(obs_shp)),)
         act_shp = env.action_spec().shape
         self.observation_space = gym.spaces.Box(
-            low=np.full(
-                obs_shp,
-                -np.inf,
-                dtype=np.float32),
-            high=np.full(
-                obs_shp,
-                np.inf,
-                dtype=np.float32),
+            low=np.full(obs_shp, -np.inf, dtype=np.float32),
+            high=np.full(obs_shp, np.inf, dtype=np.float32),
             dtype=np.float32,
         )
         self.action_space = gym.spaces.Box(
             low=np.full(act_shp, env.action_spec().minimum),
             high=np.full(act_shp, env.action_spec().maximum),
-            dtype=env.action_spec().dtype)
+            dtype=env.action_spec().dtype,
+        )
         self.env = env
         self.domain = domain
         self.task = task
@@ -170,27 +165,30 @@ class TimeStepToGymWrapper:
     def step(self, action):
         self.t += 1
         time_step = self.env.step(action)
-        return self._obs_to_array(
-            time_step.observation), time_step.reward, time_step.last() or self.t == self.max_episode_steps, defaultdict(
-            float)
+        return (
+            self._obs_to_array(time_step.observation),
+            time_step.reward,
+            time_step.last() or self.t == self.max_episode_steps,
+            defaultdict(float),
+        )
 
-    def render(self, mode='rgb_array', size: Tuple[int, int] = (384, 384), camera_id=0):
+    def render(self, mode="rgb_array", size: Tuple[int, int] = (384, 384), camera_id=0):
         height, width = size
         camera_id = dict(quadruped=2).get(self.domain, camera_id)
         return self.env.physics.render(height, width, camera_id)
 
 
 def make_env(name: str, image_size: Tuple[int, int], max_episode_steps: int, action_repeat: int, seed: int = 0):
-    domain, task = name.replace('-', '_').split('_', 1)
-    domain = dict(cup='ball_in_cup', pointmass='point_mass').get(domain, domain)
+    domain, task = name.replace("-", "_").split("_", 1)
+    domain = dict(cup="ball_in_cup", pointmass="point_mass").get(domain, domain)
 
     if (domain, task) not in suite.ALL_TASKS:
         raise ValueError(f"Unknown dm-control task: {domain}/{task}.")
 
-    env = suite.load(domain, task, task_kwargs={'random': seed}, visualize_reward=False)
+    env = suite.load(domain, task, task_kwargs={"random": seed}, visualize_reward=False)
     env = ActionDTypeWrapper(env, np.float32)
     env = ActionRepeatWrapper(env, action_repeat)
-    env = action_scale.Wrapper(env, minimum=-1., maximum=1.)
+    env = action_scale.Wrapper(env, minimum=-1.0, maximum=1.0)
     env = ExtendedTimeStepWrapper(env)
     env = TimeStepToGymWrapper(env, domain, task)
     env = TimeLimit(env, max_episode_steps)

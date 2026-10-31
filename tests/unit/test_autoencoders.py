@@ -18,9 +18,14 @@ from modeling.autoencoder.logging import LoggingCallback, LogReconstruction
 from modeling.autoencoder.savi import Corrector, SaviCnnDecoder, SaviCnnEncoder
 from modeling.autoencoder.savi.encoder import ImagePositionalEmbedding
 from modeling.autoencoder.savi.initializer import Learned, LearnedRandom, SlotInitializer
-from modeling.autoencoder.savi.predictor import (ActionConditionalTransformerPredictor, MetaAttention,
-                                                 MultiHeadSelfAttention, TransformerBlock, TransformerPredictor,
-                                                 init_xavier_)
+from modeling.autoencoder.savi.predictor import (
+    ActionConditionalTransformerPredictor,
+    MetaAttention,
+    MultiHeadSelfAttention,
+    TransformerBlock,
+    TransformerPredictor,
+    init_xavier_,
+)
 from tests.conftest import CONFIGS_DIR, make_tiny_savi
 
 
@@ -111,11 +116,11 @@ def test_base_forward_requires_reconstructions():
 # BUGS_AND_PITFALLS.md #23 (fixed).
 def test_cnn_autoencoder_config_can_be_instantiated():
     from utils.instantiate import fill_in_missing
+
     cfg = OmegaConf.load(CONFIGS_DIR / "autoencoder" / "cnn.yaml")
     fill_in_missing(cfg, {"image_size": [16, 16]})  # As train_autoencoder.py does with the dataset infos.
     autoencoder = hydra.utils.instantiate(cfg)
     assert autoencoder(torch.rand(1, 2, 3, 16, 16), torch.zeros(1, 1, 2))["reconstructions"].shape == (1, 2, 3, 16, 16)
-
 
 
 # ------------------------------------------------------------------------------------- SAVi
@@ -202,6 +207,7 @@ def test_transformer_predictors():
     plain = TransformerPredictor(slot_dim=8, action_dim=2, num_heads=2, mlp_size=16)
     assert torch.equal(plain(slots, torch.zeros(2, 2)), plain(slots, torch.ones(2, 2)))
     from modeling.autoencoder.savi.predictor import Predictor as SaviPredictor
+
     assert SaviPredictor.forward(None, None, None) is None  # Abstract body.
     conditional = ActionConditionalTransformerPredictor(slot_dim=8, action_dim=2, num_head=2, mlp_size=16)
     out = conditional(slots, torch.zeros(2, 2))
@@ -257,13 +263,15 @@ def test_savi_forward_and_decode():
     assert outputs["reconstructions"].shape == images.shape
     assert outputs["rgbs"].shape == (2, 3, 2, 3, 16, 16)
     assert outputs["masks"].shape == (2, 3, 2, 1, 16, 16)
-    assert torch.allclose(outputs["reconstructions"],
-                          (outputs["rgbs"] * outputs["masks"]).sum(2).clamp(0, 1), atol=1e-6)
+    assert torch.allclose(
+        outputs["reconstructions"], (outputs["rgbs"] * outputs["masks"]).sum(2).clamp(0, 1), atol=1e-6
+    )
 
 
 @pytest.mark.parametrize("with_images, with_ticks", [(True, True), (False, False)])
 def test_savi_visualize_reconstruction(with_images, with_ticks):
     import numpy as np
+
     savi = make_tiny_savi()
     outputs = savi(torch.rand(1, 3, 3, 16, 16), torch.zeros(1, 2, 2))
     single = {k: v[0] for k, v in outputs.items()}
@@ -336,4 +344,4 @@ def test_log_reconstruction_logs_first_sample_only_when_due():
 @pytest.mark.xfail(strict=True, reason="BUGS_AND_PITFALLS.md #31: Slot Attention scales by the wrong dimension")
 def test_slot_attention_scales_by_the_query_key_dimension():
     corrector = Corrector(num_slots=7, slot_dim=128, feature_dim=64, num_iterations=1, num_initial_iterations=3)
-    assert corrector.scale == pytest.approx(128 ** -0.5)  # q and k have slot_dim channels (paper Eq. 1).
+    assert corrector.scale == pytest.approx(128**-0.5)  # q and k have slot_dim channels (paper Eq. 1).

@@ -4,6 +4,7 @@ from torchvision import transforms
 from typing import Tuple
 import tensordict
 
+
 def TransformObservation(obs: dict):
     ret = tensordict.TensorDict()
     for k, v in obs.items():
@@ -12,6 +13,7 @@ def TransformObservation(obs: dict):
         else:
             ret[k] = torch.Tensor(v.copy())
     return ret
+
 
 class ToTensorDict(gym.Wrapper):
     def step(self, action: torch.Tensor) -> Tuple[tensordict.TensorDict, float, bool, bool, dict]:

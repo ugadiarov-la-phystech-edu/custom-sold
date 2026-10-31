@@ -27,7 +27,16 @@ class LogReconstruction(LoggingCallback):
         super().__init__(every_n_epochs, save_dir)
         self.batch_index = 0
 
-    def on_train_batch_end(self, trainer: Trainer, pl_module: LightningModule, outputs: Dict[str, Any],
-                           batch: Tuple[torch.Tensor, torch.Tensor], batch_index: int) -> None:
+    def on_train_batch_end(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule,
+        outputs: Dict[str, Any],
+        batch: Tuple[torch.Tensor, torch.Tensor],
+        batch_index: int,
+    ) -> None:
         if self.should_log(pl_module):
-            pl_module.log_image("reconstruction", pl_module.autoencoder.visualize_reconstruction({k: v[0] for k, v in outputs.items() if v.ndim > 0}))
+            pl_module.log_image(
+                "reconstruction",
+                pl_module.autoencoder.visualize_reconstruction({k: v[0] for k, v in outputs.items() if v.ndim > 0}),
+            )

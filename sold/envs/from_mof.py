@@ -32,16 +32,21 @@ class VariableDistractorsWrapper(gym.Wrapper):
             env.close()
 
 
-def make_env(name: str, image_size: Tuple[int, int], max_episode_steps: int, action_repeat: int,
-             seed: Optional[int] = None):
+def make_env(
+    name: str, image_size: Tuple[int, int], max_episode_steps: int, action_repeat: int, seed: Optional[int] = None
+):
     # Register MOF environments and parse the number of distractors.
     import multi_object_fetch  # noqa: F401  (registers the environments with gym)
-    task, distractors, reward = name.split('_')
-    min_distractors, max_distractors = map(int, distractors[:-len('Distractors')].split('to'))
-    env_names = {f'{task}_{num_distractors}Distractors_{reward}': num_distractors
-                 for num_distractors in range(min_distractors, max_distractors + 1)}
+
+    task, distractors, reward = name.split("_")
+    min_distractors, max_distractors = map(int, distractors[: -len("Distractors")].split("to"))
+    env_names = {
+        f"{task}_{num_distractors}Distractors_{reward}": num_distractors
+        for num_distractors in range(min_distractors, max_distractors + 1)
+    }
 
     def make_variant(variant: str) -> gym.Env:
         variant_seed = None if seed is None else seed + env_names[variant]  # Different seed per variant.
         return make_gym_env(variant, image_size, max_episode_steps, action_repeat, variant_seed)
+
     return VariableDistractorsWrapper(list(env_names), make_variant)

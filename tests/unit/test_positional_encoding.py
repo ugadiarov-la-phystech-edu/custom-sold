@@ -3,8 +3,13 @@ import math
 import pytest
 import torch
 
-from modeling.positional_encoding import (LearnedEncoding, NoPositionalEncoding, SinusoidalEncoding,
-                                          SinusoidalPositionalEncoding, TokenWiseSinusoidalPositionalEncoding)
+from modeling.positional_encoding import (
+    LearnedEncoding,
+    NoPositionalEncoding,
+    SinusoidalEncoding,
+    SinusoidalPositionalEncoding,
+    TokenWiseSinusoidalPositionalEncoding,
+)
 
 
 def _sinusoid(max_len, dim):

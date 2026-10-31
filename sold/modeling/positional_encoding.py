@@ -28,8 +28,10 @@ class PositionalEncoding(nn.Module, ABC):
             raise ValueError(f"Expected token_dim to be {self.token_dim}, but got {token_dim}.")
 
         if self.positional_encoding.size() != (self.max_sequence_length, token_dim):
-            raise ValueError(f"Expected positional encoding of shape ({self.max_sequence_length}, {token_dim}), "
-                             f"but got {self.positional_encoding.size()}.")
+            raise ValueError(
+                f"Expected positional encoding of shape ({self.max_sequence_length}, {token_dim}), "
+                f"but got {self.positional_encoding.size()}."
+            )
 
         positional_encoding = self.positional_encoding[:sequence_length].unsqueeze(0).unsqueeze(2)
         positional_encoding = positional_encoding.expand(batch_size, -1, num_slots, -1)
@@ -146,16 +148,11 @@ class TokenWiseSinusoidalPositionalEncoding(SinusoidalPositionalEncoding):
         # one-liner for missing at current time step.
         missing_at_current_time_step = num_slots - (x.shape[1] % num_slots) if x.shape[1] % num_slots != 0 else 0
 
-
         x = torch.cat([x, torch.zeros(x.shape[0], missing_at_current_time_step, x.shape[2]).to(x.device)], dim=1)
         x = x.view(x.shape[0], -1, num_slots, x.shape[2])
-
 
         y = super().forward(x, batch_size, num_slots)
 
         y = y.view(y.shape[0], -1, y.shape[3])
         y = y[:, :visible_slots]
         return y
-
-
-
