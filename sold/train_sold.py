@@ -4,7 +4,6 @@ import copy
 from dataclasses import asdict, dataclass
 import gym
 import hydra
-from lightning.pytorch.utilities.types import STEP_OUTPUT, OptimizerLRScheduler
 import numpy as np
 from omegaconf import DictConfig
 import os
@@ -12,13 +11,14 @@ from sold import rl
 from sold.modeling.autoencoder.base import Autoencoder
 from sold.modeling.autoencoder.losses import reconstruction_loss
 from sold.modeling.distributions import Moments
-from sold.utils.instantiate import instantiate_trainer
 from sold.utils.module import FreezeParameters
 from sold.utils.training import OnlineModule, print_summary, set_seed
 from sold.utils.visualizations import dynamics_figure, imagination_figures, reward_figures
 import torch
 import torch.distributions as D
 import torch.nn.functional as F
+from torch.nn.utils import clip_grad_norm_
+from torch.optim import Optimizer
 from typing import Any
 
 
@@ -65,6 +65,8 @@ class Imagination:
 
 
 class SOLDModule(OnlineModule):
+    GRADIENT_NORMS = ("reward_predictor", "actor", "critic")
+
     def __init__(
         self,
         autoencoder: Autoencoder,
@@ -96,8 +98,13 @@ class SOLDModule(OnlineModule):
         optimization: Mapping[str, Mapping[str, float]] | None = None,  # Or flat legacy_hparams (old checkpoints).
         **legacy_hparams: Any,
     ) -> None:
-        # Before save_hyperparameters, so new checkpoints store the grouped settings.
         optimization = optimization_settings(optimization, legacy_hparams)
+        # Every constructor argument but env, as Lightning's save_hyperparameters stored them in checkpoints.
+        hparams = {
+            name: value
+            for name, value in locals().items()
+            if name not in ("self", "env", "legacy_hparams", "__class__")
+        }
         self.min_num_context, self.max_num_context = (
             (num_context, num_context) if isinstance(num_context, int) else num_context
         )
@@ -119,8 +126,7 @@ class SOLDModule(OnlineModule):
             save_replay_buffer,
             profile,
         )
-        self.automatic_optimization = False
-        self.save_hyperparameters(logger=False, ignore=["env"])
+        self.hparams = hparams
 
         regression_infos = {
             "max_episode_steps": env.max_episode_steps,
@@ -163,7 +169,7 @@ class SOLDModule(OnlineModule):
 
         self.current_losses = defaultdict(list)
 
-    def configure_optimizers(self) -> OptimizerLRScheduler:
+    def configure_optimizers(self) -> list[Optimizer]:
         optimizers = [
             self._adam("dynamics", self.dynamics_predictor),
             self._adam("reward", self.reward_predictor),
@@ -174,15 +180,11 @@ class SOLDModule(OnlineModule):
             optimizers.append(self._adam("autoencoder", self.autoencoder))
         return optimizers
 
-    def training_step(self, batch, batch_index: int) -> STEP_OUTPUT:
+    def training_step(self, batch: dict[str, torch.Tensor], visualize: bool = False) -> dict[str, Any]:
         dynamics_optimizer, reward_optimizer, actor_optimizer, critic_optimizer, *autoencoder_optimizers = (
-            self.optimizers()
+            self.optimizers
         )
-        images, actions, rewards = (
-            batch["obs"].squeeze(0) / 255.0,
-            batch["action"].squeeze(0),
-            batch["reward"].squeeze(0),
-        )
+        images, actions, rewards = batch["obs"] / 255.0, batch["action"], batch["reward"]
 
         # Without fine-tuning, the autoencoder forward pass needs no autograd graph.
         with self.measure_gpu("learn/autoencoder"), torch.set_grad_enabled(self.finetune_autoencoder):
@@ -229,16 +231,9 @@ class SOLDModule(OnlineModule):
             )
         self._optimize("critic", critic_optimizer, outputs["critic_loss"])
 
-        if self.after_eval:
+        if visualize:
             with self.measure_gpu("learn/visualization"):
                 self.log_visualizations(rewards, reconstruction, outputs, imagination)
-
-        # Log all losses.
-        with self.measure_gpu("learn/logging"):
-            for key, value in outputs.items():
-                if key.endswith("_loss"):
-                    self.log("train/" + key, value)
-            self.log_gradients(model_names=("reward_predictor", "actor", "critic"))
         return outputs
 
     @torch.no_grad()
@@ -276,9 +271,10 @@ class SOLDModule(OnlineModule):
         """One gradient step on loss, clipping the gradient norm to the model's grad_clip."""
         with self.measure_gpu(f"learn/{model_name}_update"):
             optimizer.zero_grad()
-            self.manual_backward(loss)
+            loss.backward()
             grad_clip = self.optimizer_settings[model_name].grad_clip
-            self.clip_gradients(optimizer, gradient_clip_val=grad_clip, gradient_clip_algorithm="norm")
+            if grad_clip > 0:
+                clip_grad_norm_([param for group in optimizer.param_groups for param in group["params"]], grad_clip)
             optimizer.step()
 
     def compute_dynamics_loss(self, images: torch.Tensor, slots: torch.Tensor, actions: torch.Tensor) -> dict[str, Any]:
@@ -453,10 +449,10 @@ def train(cfg: DictConfig):
         wandb.init(project="sold", name=cfg.experiment, config=dict(cfg), sync_tensorboard=True)
     print_summary(cfg)
     set_seed(cfg.seed)
-    torch.set_float32_matmul_precision(cfg.float32_matmul_precision)  # Lightning reads this (legacy) API on GPUs.
+    torch.set_float32_matmul_precision(cfg.float32_matmul_precision)
     sold = hydra.utils.instantiate(cfg.model)
-    trainer = instantiate_trainer(cfg)
-    trainer.fit(sold, ckpt_path=os.path.abspath(cfg.checkpoint) if cfg.checkpoint else None)
+    logger = hydra.utils.instantiate(cfg.logger.tensorboard)
+    sold.fit(logger, device=cfg.device, checkpoint=os.path.abspath(cfg.checkpoint) if cfg.checkpoint else None)
 
     if cfg.logger.log_to_wandb:
         wandb.finish()

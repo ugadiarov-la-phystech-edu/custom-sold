@@ -1,24 +1,23 @@
 from abc import ABC, abstractmethod
 import gym
 import hydra
-from lightning import LightningModule, Trainer
-from lightning.pytorch.callbacks.progress.rich_progress import RichProgressBar
-from lightning.pytorch.utilities.types import STEP_OUTPUT
 import numpy as np
 import os
 from pathlib import Path
 import random
-from rich.progress import TaskID
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 import shutil
 from sold.data.ring_buffer import RingBufferDataset
-from sold.data.utils import NumUpdatesWrapper
+from sold.data.utils import sample_batches
 from sold.utils.episode_runner import EpisodeRunner
-from sold.utils.logging import LoggingStepMixin
+from sold.utils.logging import MetricsWriter
 from sold.utils.profiling import Timings
+import sys
 from termcolor import colored
 import time
 import torch
-from torch.utils.data import DataLoader
+from torch import nn
+from torch.optim import Optimizer
 from typing import Any
 
 
@@ -29,6 +28,13 @@ def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
+
+
+def resolve_device(device: str | torch.device) -> torch.device:
+    """ "auto" is the GPU when there is one."""
+    if device == "auto":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    return torch.device(device)
 
 
 def print_summary(cfg):
@@ -47,42 +53,35 @@ def print_summary(cfg):
         _pprint(k, v)
 
 
-class OnlineProgressBar(RichProgressBar):
-    """Custom progress bar for online RL training loops."""
+class ProgressBar:
+    """Progress over environment steps, shown when stdout is a terminal."""
 
-    def on_train_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
-        # Create the display and the single train task up front: Lightning >= 2.5.3 adds the task itself in
-        # on_train_batch_end if none exists, which fails when the display does not exist yet.
-        self.pl_module = pl_module
-        super().on_train_start(trainer, pl_module)
-        if self.progress is not None:
-            self.train_progress_bar_id = self._add_task(
-                self.total_train_batches, self._get_train_description(trainer.current_epoch)
-            )
+    def __init__(self, total: int, enabled: bool | None = None) -> None:
+        enabled = sys.stdout.isatty() if enabled is None else enabled
+        columns = [TextColumn("{task.description}"), BarColumn(), MofNCompleteColumn(), TimeElapsedColumn()]
+        self.progress = Progress(*columns, TimeRemainingColumn(), disable=not enabled)
+        self.task = self.progress.add_task("", total=total)
+        self.eval_return: float | None = None
 
-    def _get_train_description(self, current_epoch: int) -> str:
-        train_description = f"Steps {self.pl_module.num_steps}, Episodes {max(self.pl_module.num_episodes, 0)}"
-        return train_description
+    def __enter__(self) -> "ProgressBar":
+        self.progress.start()
+        return self
 
-    def on_train_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
-        return
+    def __exit__(self, *exc_info) -> None:
+        self.progress.stop()
 
-    def _update(self, progress_bar_id: TaskID | None, current: int, visible: bool = True) -> None:
-        if self.progress is not None and self.is_enabled:
-            self.progress.update(
-                self.train_progress_bar_id,
-                completed=self.pl_module.num_steps,
-                visible=visible,
-                description=self._get_train_description(self.trainer.current_epoch),
-            )
-            self.refresh()
-
-    @property
-    def total_train_batches(self) -> int | float:
-        return self.pl_module.max_steps
+    def update(self, num_steps: int, num_episodes: int) -> None:
+        description = f"Steps {num_steps}, Episodes {max(num_episodes, 0)}"
+        if self.eval_return is not None:
+            description += f", eval return {self.eval_return:.2f}"
+        self.progress.update(self.task, completed=num_steps, description=description)
 
 
-class OnlineModule(LoggingStepMixin, LightningModule, ABC):
+class OnlineModule(nn.Module, ABC):
+    """Online RL training: collect experience with the policy, update from the replay buffer, evaluate, checkpoint."""
+
+    GRADIENT_NORMS: tuple[str, ...] = ()  # Submodules whose gradient norms are logged after each round of updates.
+
     def __init__(
         self,
         env: gym.Env,
@@ -98,8 +97,7 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
         save_replay_buffer: bool,
         profile: bool = True,
     ) -> None:
-        """Integrates online experience collection with PyTorch Lightning's training loop.
-
+        """
         Args:
             env (gym.Env): The environment to interact with.
             max_steps (int): Maximum number of environment steps to collect before stopping training.
@@ -126,14 +124,25 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
         self.sequence_length = sequence_length
         self.buffer_capacity = buffer_capacity
         self.save_replay_buffer = save_replay_buffer
+        self.hparams: dict[str, Any] = {}  # Constructor arguments, saved in checkpoints to rebuild the module.
 
-        self.last_action = torch.full_like(
-            torch.from_numpy(self.env.action_space.sample().astype(np.float32)), float("nan")
-        ).to(self.device)
+        self.register_buffer("last_action", self._nan_action(), persistent=False)
         self.timings = Timings(enabled=profile)
         self.runner = EpisodeRunner(env, self._policy, self.timings)
         self.num_steps = 0
         self.num_episodes = -1  # Start at -1 to account for the initial reset.
+        # Set up by fit().
+        self.optimizers: list[Optimizer] = []
+        self.logger: MetricsWriter | None = None
+        self.replay_buffer: RingBufferDataset | None = None
+        self.progress = ProgressBar(max_steps)
+        self.last_timings_log = (time.perf_counter(), 0)
+        self.eval_next = False
+        self.after_eval = False  # Visualize the next update (set by eval_loop).
+
+    @property
+    def device(self) -> torch.device:
+        return next(self.parameters()).device
 
     @property
     def checkpoints_dir(self) -> Path:
@@ -143,43 +152,46 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
 
     @abstractmethod
     def select_action(self, obs: torch.Tensor, is_first: bool = False, mode: str = "train") -> torch.Tensor:
-        pass
+        """The action to take after observing obs, in mode "train" (sampled), "eval" (mode) or "random"."""
 
-    def measure_gpu(self, name: str):
-        """Time a section that queues GPU work (CUDA events on a GPU)."""
-        return self.timings.measure(name, cuda=self.device.type == "cuda")
+    @abstractmethod
+    def training_step(self, batch: dict[str, torch.Tensor], visualize: bool = False) -> dict[str, Any]:
+        """One gradient update on a batch (with figures if visualize); returns the outputs, losses under *_loss."""
 
-    def _policy(self, obs: torch.Tensor, is_first: bool, mode: str) -> torch.Tensor:
-        # select_action reads last_action to encode the next observation.
-        self.last_action[:] = self.select_action(obs.to(self.device), is_first=is_first, mode=mode)
-        return self.last_action
+    @abstractmethod
+    def configure_optimizers(self) -> list[Optimizer]:
+        """The optimizers whose states checkpoints store."""
 
-    def on_fit_start(self) -> None:
-        self.eval_next = False
-        self.after_eval = False
+    # ---------------------------------------------------------------------------------------------- training loop
+    def fit(self, logger: MetricsWriter, device: str | torch.device = "auto", checkpoint: str | None = None) -> None:
+        """Train for max_steps environment steps, logging to logger; checkpoint resumes a saved run."""
+        self.to(resolve_device(device))
+        self.train()
+        self.logger = logger
+        self.replay_buffer = RingBufferDataset(
+            self.buffer_capacity, self.batch_size, self.sequence_length, save_path=logger.log_dir + "/replay_buffer"
+        )
+        self.optimizers = self.configure_optimizers()
+        if checkpoint is not None:
+            self.restore(torch.load(checkpoint, map_location=self.device, weights_only=False))
         self.runner.done = True  # Start with a new episode.
         self.last_timings_log = (time.perf_counter(), self.num_steps)
 
-    def train_dataloader(self) -> DataLoader:
-        if not hasattr(self, "replay_buffer"):
-            self.replay_buffer = RingBufferDataset(
-                self.buffer_capacity,
-                self.batch_size,
-                self.sequence_length,
-                save_path=self.logger.log_dir + "/replay_buffer",
-            )
-        dataset = NumUpdatesWrapper(self.replay_buffer, self.num_updates, measure_sampling=self.timings.enabled)
-        # No worker process: a fork per epoch costs more than the two samples, and a persistent worker would not see
-        # the episodes added after it was forked. The private generator keeps the loader's own seed draw off the global
-        # RNG, which NumUpdatesWrapper draws from instead (once per epoch, like the worker's seed before).
-        return DataLoader(dataset, batch_size=1, pin_memory=True, num_workers=0, generator=torch.Generator())
+        with self.progress:
+            if self.num_steps == 0:
+                # Draws the sampler's seed before the first collection, as the old loop did; run RNG streams rely on it.
+                self.update()
+            self.collect(self.num_seed if self.num_steps == 0 and self.num_seed > 0 else self.update_freq)
+            while self.num_steps < self.max_steps:
+                self.collect(self.update_freq)
+                self.update()
+        logger.finalize()
 
     @torch.no_grad()
-    def on_train_epoch_start(self) -> None:
-        num_collect_steps = self.num_seed if self.num_steps == 0 and self.num_seed > 0 else self.update_freq
-        for _ in range(num_collect_steps):
+    def collect(self, num_steps: int) -> None:
+        for _ in range(num_steps):
             self.collect_step()
-        self.batch_mark = time.perf_counter()
+            self.progress.update(self.num_steps, self.num_episodes)
 
     @torch.no_grad()
     def collect_step(self) -> None:
@@ -195,10 +207,11 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
             # Reset environment and store initial observation.
             self.log("train/buffer_size", self.replay_buffer.num_timesteps)
             if self.replay_buffer.last_episode_return is not None:
-                self.log("train/episode_return", self.replay_buffer.last_episode_return.item(), prog_bar=True)
+                self.log("train/episode_return", self.replay_buffer.last_episode_return)
             obs = self.runner.reset()
             with self.timings.measure("replay_buffer/add_step"):
-                self.replay_buffer.add_step(self._complete_first_timestep({"obs": obs}))
+                first = {"obs": obs, "action": self._nan_action(), "reward": torch.tensor(float("nan"))}
+                self.replay_buffer.add_step(first)
             self.log("train/num_episodes", self.num_episodes)
             self.log("train/num_steps", self.num_steps)
 
@@ -209,14 +222,24 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
             self.replay_buffer.add_step({"obs": obs, "action": self.runner.action, "reward": reward}, done=done)
         self.num_steps += 1
 
-    def _complete_first_timestep(self, step_data: dict[str, Any]) -> dict[str, Any]:
-        if "action" not in step_data:
-            step_data["action"] = torch.full_like(
-                torch.from_numpy(self.env.action_space.sample().astype(np.float32)), float("nan")
-            )
-        if "reward" not in step_data:
-            step_data["reward"] = torch.tensor(float("nan"))
-        return step_data
+    def update(self) -> None:
+        """A round of num_updates gradient updates on replay-buffer batches, then the round's metrics."""
+        outputs, device = None, self.device
+        visualize, self.after_eval = self.after_eval, False
+        for index, batch in enumerate(sample_batches(self.replay_buffer, self.num_updates, self.timings)):
+            with self.timings.measure("learn/training_step"):
+                batch = {key: value.to(device) for key, value in batch.items()}
+                outputs = self.training_step(batch, visualize=visualize and index == 0)
+        if outputs is not None:
+            self.log_round(outputs)
+
+    def _policy(self, obs: torch.Tensor, is_first: bool, mode: str) -> torch.Tensor:
+        # select_action reads last_action to encode the next observation.
+        self.last_action[:] = self.select_action(obs.to(self.device), is_first=is_first, mode=mode)
+        return self.last_action
+
+    def _nan_action(self) -> torch.Tensor:
+        return torch.full_like(torch.from_numpy(self.env.action_space.sample().astype(np.float32)), float("nan"))
 
     @torch.no_grad()
     def eval_loop(self) -> None:
@@ -228,7 +251,8 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
             episode_returns.append(sum(episode["reward"]))
             if "success" in episode:
                 successes.append(episode["success"])
-        self.log("eval/episode_return", np.mean(episode_returns), prog_bar=True)
+        self.log("eval/episode_return", np.mean(episode_returns))
+        self.progress.eval_return = float(np.mean(episode_returns))
         if successes:
             self.log("eval/success_rate", np.mean(successes))
 
@@ -238,7 +262,7 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
                 self.log_video(f"train/episode_{episode_index}", torch.stack(episode["obs"]))
 
         with self.timings.measure("eval/checkpoint"):
-            self.trainer.save_checkpoint(
+            self.save_checkpoint(
                 self.checkpoints_dir / f"sold-steps={self.num_steps}-episode={self.num_episodes}-"
                 f"eval_episode_return={np.mean(episode_returns)}.ckpt"
             )
@@ -246,83 +270,104 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
         self.eval_next = False
         self.after_eval = True
 
-    def on_before_batch_transfer(self, batch: Any, dataloader_idx: int) -> Any:
-        if "sample_seconds" in batch:
-            for seconds in batch.pop("sample_seconds").tolist():
-                self.timings.add("replay_buffer/sample", seconds)
-        return batch
+    # ---------------------------------------------------------------------------------------------------- logging
+    def log(self, name: str, value: torch.Tensor | float) -> None:
+        self.logger.log_metrics({name: value}, step=self.num_steps)
 
-    def on_train_batch_start(self, batch: Any, batch_idx: int) -> None:
-        self._time_since_batch_mark("replay_buffer/batch_wait")
+    def log_image(self, name: str, image: torch.Tensor) -> None:
+        self.logger.log_image(name, image, step=self.num_steps)
 
-    def on_train_batch_end(self, outputs: STEP_OUTPUT, batch: Any, batch_idx: int) -> None:
-        self.after_eval = False  # Reset 'after_eval' to False after the first training batch.
-        self._time_since_batch_mark("learn/training_step")
+    def log_video(self, name: str, video: torch.Tensor) -> None:
+        self.logger.log_video(name, video, step=self.num_steps)
 
-    def _time_since_batch_mark(self, name: str) -> None:
-        now = time.perf_counter()
-        self.timings.add(name, now - self.batch_mark)
-        self.batch_mark = now
+    def measure_gpu(self, name: str):
+        """Time a section that queues GPU work (CUDA events on a GPU)."""
+        return self.timings.measure(name, cuda=self.device.type == "cuda")
 
-    def on_train_epoch_end(self) -> None:
-        if self.timings.enabled and self.device.type == "cuda":
-            with self.timings.measure("learn/gpu_drain"):
-                torch.cuda.synchronize(self.device)
-        self.log_timings()
-        if self.num_steps >= self.max_steps:
-            self.trainer.should_stop = True
+    def gradient_norm(self, model_name: str) -> torch.Tensor:
+        model = getattr(self, model_name)
+        grads = [param.grad.detach().flatten() for param in model.parameters() if param.grad is not None]
+        return torch.cat(grads).norm()
 
-    def log_timings(self) -> None:
-        """Log the section timings and env steps per second since the last call."""
-        if not (self.timings.enabled and self.is_logging_step("timing/env_steps_per_second")):
-            return
-        for name, milliseconds in self.timings.summary().items():
-            self.log(f"timing/{name}_ms", milliseconds)
-        last_time, last_num_steps = self.last_timings_log
-        now = time.perf_counter()
-        self.log("timing/env_steps_per_second", (self.num_steps - last_num_steps) / (now - last_time))
-        self.last_timings_log = (now, self.num_steps)
-        if self.device.type == "cuda":  # Peaks since the last call.
-            self.log("memory/gpu_peak_allocated_gb", torch.cuda.max_memory_allocated(self.device) / 2**30)
-            self.log("memory/gpu_peak_reserved_gb", torch.cuda.max_memory_reserved(self.device) / 2**30)
-            torch.cuda.reset_peak_memory_stats(self.device)
+    def log_round(self, outputs: dict[str, Any]) -> None:
+        """Write a round's metrics: the last update's losses and gradient norms, timings and peak GPU memory."""
+        with self.measure_gpu("learn/logging"):
+            metrics = {"train/" + key: value for key, value in outputs.items() if key.endswith("_loss")}
+            metrics |= {f"gradients/{name}": self.gradient_norm(name) for name in self.GRADIENT_NORMS}
+        on_gpu = self.device.type == "cuda"
+        if self.timings.enabled:
+            if on_gpu:
+                with self.timings.measure("learn/gpu_drain"):
+                    torch.cuda.synchronize(self.device)
+            metrics |= {f"timing/{name}_ms": milliseconds for name, milliseconds in self.timings.summary().items()}
+            last_time, last_num_steps = self.last_timings_log
+            now = time.perf_counter()
+            metrics["timing/env_steps_per_second"] = (self.num_steps - last_num_steps) / (now - last_time)
+            self.last_timings_log = (now, self.num_steps)
+            if on_gpu:  # Peaks since the last round.
+                metrics["memory/gpu_peak_allocated_gb"] = torch.cuda.max_memory_allocated(self.device) / 2**30
+                metrics["memory/gpu_peak_reserved_gb"] = torch.cuda.max_memory_reserved(self.device) / 2**30
+                torch.cuda.reset_peak_memory_stats(self.device)
+        self.logger.log_metrics(metrics, step=self.num_steps)
 
-    @property
-    def logging_step(self) -> int:
-        return self.num_steps
-
-    def on_save_checkpoint(self, checkpoint: dict[str, Any]) -> None:
-        checkpoint["num_steps"] = self.num_steps
-        checkpoint["num_episodes"] = self.num_episodes
-
-        # Save the state of the replay buffer for the last checkpoint to enable checkpoint/restart (CPR) functionality.
+    # ------------------------------------------------------------------------------------------------ checkpoints
+    def save_checkpoint(self, path: str | Path) -> None:
+        checkpoint = {
+            "state_dict": self.state_dict(),
+            "optimizer_states": [optimizer.state_dict() for optimizer in self.optimizers],
+            "hyper_parameters": self.hparams,
+            "num_steps": self.num_steps,
+            "num_episodes": self.num_episodes,
+        }
         if self.save_replay_buffer:
-            replay_buffer_dir = (
-                self.checkpoints_dir / f"replay_buffer-steps={self.num_steps}-episode={self.num_episodes}"
-            )
-            if Path(self.replay_buffer.save_path).resolve().exists():
-                shutil.copytree(Path(self.replay_buffer.save_path).resolve(), replay_buffer_dir)
-            # Keep only the copy for this checkpoint (sorting the names as text would misorder 9000 and 10500).
-            for old_replay_buffer_dir in self.checkpoints_dir.glob("replay_buffer-steps=*"):
-                if old_replay_buffer_dir != replay_buffer_dir:
-                    shutil.rmtree(old_replay_buffer_dir)
+            checkpoint |= self.replay_buffer_checkpoint()
+        torch.save(checkpoint, path)
 
-            checkpoint["replay_buffer_path"] = replay_buffer_dir
-            checkpoint["replay_buffer_capacity"] = self.replay_buffer.capacity
-            checkpoint["replay_buffer_info"] = self.replay_buffer.info
-            checkpoint["replay_buffer_head"] = self.replay_buffer.head
-            checkpoint["replay_buffer_tail"] = self.replay_buffer.tail
-            checkpoint["replay_buffer_episode_boundaries"] = self.replay_buffer.episode_boundaries
+    def replay_buffer_checkpoint(self) -> dict[str, Any]:
+        """Copy the replay buffer next to the checkpoints (replacing older copies) and describe it for resuming."""
+        replay_buffer_dir = self.checkpoints_dir / f"replay_buffer-steps={self.num_steps}-episode={self.num_episodes}"
+        if Path(self.replay_buffer.save_path).resolve().exists():
+            shutil.copytree(Path(self.replay_buffer.save_path).resolve(), replay_buffer_dir)
+        # Keep only the copy for this checkpoint (sorting the names as text would misorder 9000 and 10500).
+        for old_replay_buffer_dir in self.checkpoints_dir.glob("replay_buffer-steps=*"):
+            if old_replay_buffer_dir != replay_buffer_dir:
+                shutil.rmtree(old_replay_buffer_dir)
+        return {
+            "replay_buffer_path": replay_buffer_dir,
+            "replay_buffer_capacity": self.replay_buffer.capacity,
+            "replay_buffer_info": self.replay_buffer.info,
+            "replay_buffer_head": self.replay_buffer.head,
+            "replay_buffer_tail": self.replay_buffer.tail,
+            "replay_buffer_episode_boundaries": self.replay_buffer.episode_boundaries,
+        }
 
-    def on_load_checkpoint(self, checkpoint: dict[str, Any]) -> None:
+    @classmethod
+    def load(cls, path: str | Path, env: gym.Env, map_location: str | torch.device = "cpu", **overrides: Any):
+        """The module saved at path, rebuilt from the checkpoint's hyperparameters (overrides replace some)."""
+        checkpoint = torch.load(path, map_location=map_location, weights_only=False)
+        module = cls(env=env, **{**checkpoint["hyper_parameters"], **overrides})
+        module.load_state_dict(checkpoint["state_dict"])
+        module.load_counters(checkpoint)
+        return module
+
+    def load_counters(self, checkpoint: dict[str, Any]) -> None:
         self.num_steps = checkpoint["num_steps"]
         self.num_episodes = checkpoint["num_episodes"] - 1  # Incremented at once, since self.runner.done is True.
 
-        # The replay buffer is only needed to resume training. Without a trainer (e.g. load_from_checkpoint in
-        # evaluate_sold.py) there is no logger directory to restore it into.
+    def restore(self, checkpoint: dict[str, Any]) -> None:
+        """Resume training from a checkpoint: weights, optimizer states, counters and the saved replay buffer."""
+        self.load_state_dict(checkpoint["state_dict"])
+        if len(checkpoint["optimizer_states"]) != len(self.optimizers):
+            raise ValueError(
+                f"The checkpoint has {len(checkpoint['optimizer_states'])} optimizer states for "
+                f"{len(self.optimizers)} optimizers (BUGS_AND_PITFALLS.md #17)."
+            )
+        for optimizer, state in zip(self.optimizers, checkpoint["optimizer_states"]):
+            optimizer.load_state_dict(state)
+        self.load_counters(checkpoint)
+
         replay_buffer_path = Path(checkpoint["replay_buffer_path"]) if "replay_buffer_path" in checkpoint else None
-        if replay_buffer_path is not None and replay_buffer_path.exists() and self._trainer is not None:
-            self.train_dataloader()  # Initializes the replay buffer.
+        if replay_buffer_path is not None and replay_buffer_path.exists():
             if checkpoint["replay_buffer_info"].fields is None:
                 raise ValueError("Cannot load replay buffer without fields.")
             self.replay_buffer.load_from_disk_storage(

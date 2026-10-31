@@ -138,6 +138,8 @@ An unpinned install today pulls versions that hit 3a, 3b and 3c.
 
 ### 3a. Lightning 2.5.3 and newer crash SOLD's custom progress bar (fixed)
 
+**Update:** SOLD training no longer uses Lightning (its loop, logging, checkpoints and progress bar are plain code in `sold/utils/training.py`), so this item and 3b only concern SAVi training (`train_autoencoder.py`), which still runs on Lightning with the pins below.
+
 **Status:** fixed (uncommitted). `OnlineProgressBar.on_train_start` now calls Lightning's `on_train_start` and creates the train task immediately, so Lightning's own `on_train_batch_end` finds it. Not yet tried with Lightning 2.5.3 or newer, so keep the pin until it is.
 
 `OnlineProgressBar` (`sold/utils/training.py`) overrides `on_train_start` without calling the parent, and creates the Rich progress display lazily in `_update`.

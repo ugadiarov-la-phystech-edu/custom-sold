@@ -1,6 +1,5 @@
 """utils: module helpers, Hydra instantiation helpers, logging and visualizations."""
 
-import json
 import math
 import numpy as np
 from omegaconf import OmegaConf
@@ -9,11 +8,11 @@ from pathlib import Path
 import pytest
 from sold.utils import visualizations as vis
 from sold.utils.instantiate import fill_in_missing, instantiate_dataloaders, instantiate_many, instantiate_trainer
-from sold.utils.logging import ExtendedTensorBoardLogger, LoggingStepMixin
+from sold.utils.logging import ExtendedTensorBoardLogger, LoggingStepMixin, MetricsWriter
 from sold.utils.module import FreezeParameters
 from sold.utils.schedulers import LinearWarmupCosineAnnealingLR
 import sys
-from tests.conftest import write_image_dataset
+from tests.conftest import read_metrics, write_image_dataset
 import torch
 from unittest import mock
 
@@ -46,12 +45,12 @@ def test_instantiate_trainer(tmp_path):
                 "tb": {"_target_": "sold.utils.logging.ExtendedTensorBoardLogger", "save_dir": str(tmp_path)},
                 "log_to_wandb": False,
             },
-            "callbacks": {"bar": {"_target_": "sold.utils.training.OnlineProgressBar"}},
+            "callbacks": {"bar": {"_target_": "lightning.pytorch.callbacks.RichProgressBar"}},
         }
     )
     trainer = instantiate_trainer(cfg)
     assert isinstance(trainer.logger, ExtendedTensorBoardLogger)
-    assert any(type(c).__name__ == "OnlineProgressBar" for c in trainer.callbacks)
+    assert any(type(c).__name__ == "RichProgressBar" for c in trainer.callbacks)
 
 
 def test_instantiate_dataloaders(tmp_path):
@@ -99,12 +98,13 @@ def test_extended_tensorboard_logger_writes_metrics_images_and_videos(tmp_path):
     logger.log_metrics({"b": 2.0}, step=0)
     logger.log_metrics({"a": 3.0}, step=5)  # Flushes step 0.
     logger.log_metrics({"c": 4.0}, step=7)  # Flushes step 5.
-    logger.current_step = None
-    logger.log_metrics({"d": 5.0}, step=9)  # No flush when the current step is unknown.
-    logger._flush_metrics()
-    logger._flush_metrics()  # Nothing left to write.
-    records = [json.loads(line) for line in open(os.path.join(logger.log_dir, "metrics", "metrics.jsonl"))]
-    assert records == [{"step": 0, "a": 1.0, "b": 2.0}, {"step": 5, "a": 3.0}, {"step": 9, "c": 4.0, "d": 5.0}]
+    logger.writer._flush_metrics()
+    logger.writer._flush_metrics()  # Nothing left to write.
+    assert read_metrics(logger.log_dir) == [
+        {"step": 0, "a": 1.0, "b": 2.0},
+        {"step": 5, "a": 3.0},
+        {"step": 7, "c": 4.0},
+    ]
 
     logger.log_image("recon", torch.rand(3, 8, 8), step=3)
     assert os.path.isfile(os.path.join(logger.log_dir, "images", "recon-step=3.png"))
@@ -182,28 +182,30 @@ def test_logging_step_mixin_other_loggers_and_default_step():
     assert LoggingStepMixin.logging_step.fget(module) == 3
 
 
-def test_log_gradients_logs_norm_of_available_grads():
-    module = _Module(logger=None)
-    module.net = torch.nn.Linear(2, 1)
-    module.net.weight.grad = torch.full((1, 2), 3.0)
-    module.net.bias.grad = None
-    module.log_gradients(("net",))
-    name, norm, _ = module.calls[0]
-    assert name == "gradients/net" and torch.is_tensor(norm)  # Converted only if it is written.
-    assert norm.item() == pytest.approx(np.sqrt(18.0))
-    module.trainer.is_last_batch = False  # Nothing would be written, so no norms are computed.
-    module.log_gradients(("net",))
-    assert len(module.calls) == 1
-
-
 # BUGS_AND_PITFALLS.md #18 (fixed).
 def test_last_metrics_record_is_written_when_training_ends(tmp_path):
     logger = ExtendedTensorBoardLogger(save_dir=str(tmp_path), name="logs")
     logger.log_metrics({"loss": 1.0}, step=1)
     logger.log_metrics({"loss": 2.0}, step=2)
     logger.finalize("success")
-    records = [json.loads(line) for line in open(Path(logger.log_dir) / "metrics" / "metrics.jsonl")]
+    records = read_metrics(logger.log_dir)
     assert records[-1] == {"step": 2, "loss": 2.0}
+
+
+def test_metrics_writer_creates_the_next_version_dir(tmp_path):
+    first = MetricsWriter.create(str(tmp_path), name="logs")
+    assert Path(first.log_dir) == tmp_path / "logs" / "version_0"
+    (tmp_path / "logs" / "version_7").mkdir()
+    (tmp_path / "logs" / "other").mkdir()
+    assert Path(MetricsWriter.create(str(tmp_path), name="logs").log_dir) == tmp_path / "logs" / "version_8"
+
+
+def test_metrics_writer_converts_values_like_lightning(tmp_path):
+    writer = MetricsWriter(str(tmp_path))
+    writer.log_metrics({"count": 45, "mean": np.float64(1 / 3), "loss": torch.tensor(0.5)}, step=1)
+    writer.finalize()
+    records = read_metrics(tmp_path)
+    assert records == [{"step": 1, "count": 45.0, "mean": torch.tensor(1 / 3).item(), "loss": 0.5}]
 
 
 # -------------------------------------------------------------------------------- schedulers

@@ -1,26 +1,22 @@
 from collections.abc import Iterator
 from sold.data.ring_buffer import RingBufferDataset
-import time
+from sold.utils.profiling import Timings
 import torch
-from torch.utils.data import IterableDataset
 
 
-class NumUpdatesWrapper(IterableDataset):
-    def __init__(self, dataset: RingBufferDataset, num_updates: int, measure_sampling: bool = False) -> None:
-        self.dataset = dataset
-        self.num_updates = num_updates
-        self.measure_sampling = measure_sampling  # Add "sample_seconds" to each sample.
+def sample_batches(
+    buffer: RingBufferDataset, num_updates: int, timings: Timings | None = None
+) -> Iterator[dict[str, torch.Tensor]]:
+    """num_updates batches from the replay buffer; none while it is empty.
 
-    def __iter__(self) -> Iterator:
-        # Seeded from the global RNG like a DataLoader worker, so that runs sample the same sequences as before the
-        # buffer was sampled in the main process (and old checkpoints resume with the same stream).
-        generator = torch.Generator().manual_seed(torch.empty((), dtype=torch.int64).random_().item())
-        if self.dataset.is_empty:
-            return iter([])
-
-        for _ in range(self.num_updates):
-            start_time = time.perf_counter()
-            sample = self.dataset.sample(generator)
-            if self.measure_sampling:
-                sample["sample_seconds"] = torch.tensor(time.perf_counter() - start_time, dtype=torch.float64)
-            yield sample
+    They come from a generator seeded with one draw of the global RNG, like the DataLoader worker that used to sample
+    was, so that runs keep the same sample stream. timings records each sample as replay_buffer/sample.
+    """
+    generator = torch.Generator().manual_seed(torch.empty((), dtype=torch.int64).random_().item())
+    if buffer.is_empty:
+        return
+    timings = timings or Timings(enabled=False)
+    for _ in range(num_updates):
+        with timings.measure("replay_buffer/sample"):
+            batch = buffer.sample(generator)
+        yield batch

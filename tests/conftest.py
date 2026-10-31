@@ -5,6 +5,7 @@ import os
 os.environ.setdefault("HYDRA_FULL_ERROR", "1")
 
 import functools
+import json
 import matplotlib
 from pathlib import Path
 import random
@@ -138,24 +139,18 @@ def tiny_sold(fake_env):
     return make_tiny_sold(fake_env)
 
 
-def make_online_trainer(tmp_path, **kwargs):
-    """A Lightning trainer configured like configs/trainer/online.yaml + callbacks/sold.yaml, on CPU."""
-    from lightning import Trainer
-    from sold.utils.logging import ExtendedTensorBoardLogger
-    from sold.utils.training import OnlineProgressBar
+def read_metrics(log_dir):
+    """The records of log_dir/metrics/metrics.jsonl."""
+    return [json.loads(line) for line in open(Path(log_dir) / "metrics" / "metrics.jsonl")]
 
-    params = dict(
-        max_steps=-1,
-        max_epochs=-1,
-        enable_checkpointing=False,
-        devices=1,
-        accelerator="cpu",
-        logger=ExtendedTensorBoardLogger(save_dir=str(tmp_path), name="logs"),
-        callbacks=[OnlineProgressBar()],
-        enable_model_summary=False,
-    )
-    params.update(kwargs)
-    return Trainer(**params)
+
+def fit_sold(module, tmp_path, checkpoint=None):
+    """Train a SOLD module on the CPU, logging under tmp_path/logs like configs/logger/sold.yaml; returns the writer."""
+    from sold.utils.logging import MetricsWriter
+
+    logger = MetricsWriter.create(str(tmp_path), name="logs")
+    module.fit(logger, device="cpu", checkpoint=checkpoint)
+    return logger
 
 
 # ----------------------------------------------------------------------------------- datasets

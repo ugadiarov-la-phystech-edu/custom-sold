@@ -8,7 +8,7 @@ import shutil
 from sold import evaluate_sold, generate_dataset, train_autoencoder, train_sold
 import sys
 from tests import fakes
-from tests.conftest import make_tiny_savi
+from tests.conftest import make_tiny_savi, read_metrics
 import torch
 
 pytestmark = pytest.mark.slow
@@ -37,7 +37,7 @@ def sold_overrides(run_dir, savi_checkpoint, **values):
         f"hydra.run.dir={run_dir}",
         f"logger.tensorboard.save_dir={run_dir}",
         "experiment=it",
-        "trainer.accelerator=cpu",
+        "device=cpu",
         f"model.autoencoder.checkpoint_path={savi_checkpoint}",
         "model.max_steps=30",
         "model.num_seed=10",
@@ -170,7 +170,7 @@ def test_train_sold_writes_checkpoints_and_metrics(sold_run):
         "sold-steps=24-episode=3",
     ]
     assert "replay_buffer-steps=24-episode=3" in names
-    metrics = [json.loads(line) for line in open(sold_run / "logs/version_0/metrics/metrics.jsonl")]
+    metrics = read_metrics(sold_run / "logs/version_0")
     assert any("eval/episode_return" in record for record in metrics)
     assert (sold_run / ".hydra" / "config.yaml").exists()
 

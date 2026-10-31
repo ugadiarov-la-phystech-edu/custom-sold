@@ -1,6 +1,5 @@
-"""utils/training.py: seeding, summary, the online progress bar and the OnlineModule collection loop."""
+"""utils/training.py: seeding, summary, the progress bar and the OnlineModule training loop."""
 
-import json
 import numpy as np
 import os
 from pathlib import Path
@@ -9,9 +8,10 @@ import random
 from sold.utils import training
 from sold.utils.episode_runner import EpisodeRunner
 from sold.utils.profiling import Timings
-from sold.utils.training import OnlineProgressBar, print_summary, set_seed
+from sold.utils.training import ProgressBar, print_summary, resolve_device, set_seed
 from tests import fakes
-from tests.conftest import add_episode, make_episode, make_online_trainer, make_tiny_sold
+from tests.conftest import add_episode, fit_sold, make_episode, make_tiny_sold, read_metrics
+from tests.unit.test_profiling import FakeEvent
 import torch
 from types import SimpleNamespace
 from unittest import mock
@@ -34,6 +34,14 @@ def test_set_seed_is_reproducible(monkeypatch):
     cuda_seed.assert_called_once_with(5)
 
 
+def test_resolve_device(monkeypatch):
+    assert resolve_device("cpu") == torch.device("cpu")
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    assert resolve_device("auto") == torch.device("cpu")
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    assert resolve_device("auto") == torch.device("cuda")
+
+
 def test_print_summary(monkeypatch, capsys):
     hydra_config = SimpleNamespace(runtime=SimpleNamespace(output_dir="/out/dir"))
     monkeypatch.setattr(training.hydra.core.hydra_config.HydraConfig, "get", staticmethod(lambda: hydra_config))
@@ -46,29 +54,26 @@ def test_print_summary(monkeypatch, capsys):
         assert text in out
 
 
-def test_progress_bar_helpers():
-    bar = OnlineProgressBar()
-    module = SimpleNamespace(num_steps=12, num_episodes=-1, max_steps=99)
-    bar.pl_module = module
-    assert bar._get_train_description(0) == "Steps 12, Episodes 0"
-    assert bar.on_train_epoch_start(None, module) is None
-    assert bar.total_train_batches == 99
+def test_progress_bar_describes_steps_episodes_and_eval_return():
+    with ProgressBar(total=99, enabled=False) as bar:
+        bar.update(12, -1)
+        task = bar.progress.tasks[0]
+        assert (task.description, task.completed, task.total) == ("Steps 12, Episodes 0", 12, 99)
+        bar.eval_return = 1.5
+        bar.update(21, 2)
+        assert bar.progress.tasks[0].description == "Steps 21, Episodes 2, eval return 1.50"
+    assert ProgressBar(total=1).progress.disable  # No terminal under pytest.
+    assert not ProgressBar(total=1, enabled=True).progress.disable
 
 
 def test_online_module_initial_state(tiny_sold):
     assert tiny_sold.num_steps == 0 and tiny_sold.num_episodes == -1
     assert tiny_sold.last_action.shape == (2,) and torch.isnan(tiny_sold.last_action).all()
+    assert "last_action" not in tiny_sold.state_dict()  # Not persistent: the checkpoint keys stay as they were.
     assert tiny_sold.sequence_length == 3 + 2
-    assert tiny_sold.logging_step == 0
-    tiny_sold.num_steps = 7
-    assert tiny_sold.logging_step == 7
-
-
-def test_complete_first_timestep_adds_nan_action_and_reward(tiny_sold):
-    step = tiny_sold._complete_first_timestep({"obs": torch.zeros(1)})
-    assert torch.isnan(step["action"]).all() and step["action"].shape == (2,) and torch.isnan(step["reward"])
-    given = {"obs": 0, "action": torch.ones(2), "reward": torch.tensor(1.0)}
-    assert tiny_sold._complete_first_timestep(dict(given))["reward"] == 1.0
+    assert tiny_sold.device == torch.device("cpu") and tiny_sold.replay_buffer is None
+    assert {"max_steps", "optimization", "profile", "autoencoder"} <= set(tiny_sold.hparams)
+    assert "env" not in tiny_sold.hparams
 
 
 def test_online_module_runner_updates_the_last_action(tiny_sold):
@@ -136,97 +141,88 @@ def test_episode_runner_without_success_info(monkeypatch):
     assert "success" not in runner.play_episode(mode="train")
 
 
-def test_on_train_epoch_end_stops_at_max_steps(tiny_sold):
-    tiny_sold.trainer = SimpleNamespace(should_stop=False, is_last_batch=False)
-    tiny_sold.num_steps = tiny_sold.max_steps - 1
-    tiny_sold.on_train_epoch_end()
-    assert tiny_sold.trainer.should_stop is False
-    tiny_sold.num_steps = tiny_sold.max_steps
-    tiny_sold.on_train_epoch_end()
-    assert tiny_sold.trainer.should_stop is True
+# ----------------------------------------------------------------------------- round logging
+def _with_fake_logger(tiny_sold, num_steps=30):
+    tiny_sold.logger = mock.Mock()
+    tiny_sold.num_steps = num_steps
+    return tiny_sold.logger
 
 
-def test_on_train_epoch_end_waits_for_the_gpu(tiny_sold, monkeypatch):
-    synchronized = []
+def test_log_round_writes_losses_gradient_norms_and_timings(tiny_sold):
+    logger = _with_fake_logger(tiny_sold)
+    expected_norms = {}
+    for name in tiny_sold.GRADIENT_NORMS:
+        param = next(getattr(tiny_sold, name).parameters())
+        param.grad = torch.full_like(param, 3.0)
+        expected_norms[f"gradients/{name}"] = 3.0 * np.sqrt(param.numel())
+    tiny_sold.log_round({"actor_loss": torch.tensor(0.5), "predicted_rewards": torch.zeros(1)})
+    (metrics,), kwargs = logger.log_metrics.call_args
+    assert kwargs == {"step": 30}
+    assert metrics["train/actor_loss"] == 0.5 and "train/predicted_rewards" not in metrics
+    assert {name: norm.item() for name, norm in metrics.items() if name.startswith("gradients/")} == pytest.approx(
+        expected_norms
+    )
+    assert "timing/learn/logging_ms" in metrics and metrics["timing/env_steps_per_second"] > 0
+    assert not any(name.startswith("memory/") for name in metrics)
+
+
+def test_log_round_without_profiling_writes_no_timings(tiny_sold):
+    logger = _with_fake_logger(tiny_sold)
+    tiny_sold.timings.enabled = False
+    tiny_sold.GRADIENT_NORMS = ()
+    tiny_sold.log_round({"critic_loss": torch.tensor(1.0)})
+    assert logger.log_metrics.call_args.args[0] == {"train/critic_loss": torch.tensor(1.0)}
+
+
+def test_log_round_on_a_gpu_drains_it_and_logs_peak_memory(tiny_sold, monkeypatch):
+    logger = _with_fake_logger(tiny_sold)
+    synchronized, reset = [], []
     monkeypatch.setattr(torch.cuda, "synchronize", synchronized.append)
-    tiny_sold.trainer = SimpleNamespace(should_stop=False, is_last_batch=False)
-    tiny_sold._device = torch.device("cuda")
-    tiny_sold.on_train_epoch_end()
-    assert [device.type for device in synchronized] == ["cuda"] and "learn/gpu_drain" in tiny_sold.timings.summary()
-
-
-def test_log_timings_adds_peak_gpu_memory(tiny_sold, monkeypatch):
-    logged, reset = {}, []
     monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda device: 2**30)
     monkeypatch.setattr(torch.cuda, "max_memory_reserved", lambda device: 2**31)
     monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", reset.append)
-    monkeypatch.setattr(tiny_sold, "log", lambda name, value: logged.update({name: value}))
-    tiny_sold.trainer = SimpleNamespace(is_last_batch=True)
-    tiny_sold.last_timings_log = (0.0, 0)
-    tiny_sold._device = torch.device("cuda")
-    tiny_sold.log_timings()
-    assert logged["memory/gpu_peak_allocated_gb"] == 1.0 and logged["memory/gpu_peak_reserved_gb"] == 2.0
-    assert len(reset) == 1 and "timing/env_steps_per_second" in logged
+    monkeypatch.setattr(type(tiny_sold), "device", property(lambda self: torch.device("cuda")))
+    tiny_sold.timings.event_factory = FakeEvent
+    tiny_sold.GRADIENT_NORMS = ()
+    tiny_sold.log_round({})
+    metrics = logger.log_metrics.call_args.args[0]
+    assert [device.type for device in synchronized] == ["cuda"] and len(reset) == 1
+    assert metrics["memory/gpu_peak_allocated_gb"] == 1.0 and metrics["memory/gpu_peak_reserved_gb"] == 2.0
+    assert {"timing/learn/gpu_drain_ms", "timing/learn/logging_ms"} <= set(metrics)
 
 
-def test_sample_durations_are_read_before_the_batch_transfer(tiny_sold):
-    batch = {"obs": torch.zeros(1), "sample_seconds": torch.tensor([0.002], dtype=torch.float64)}
-    assert tiny_sold.on_before_batch_transfer(batch, 0) == {"obs": torch.zeros(1)}
-    assert tiny_sold.on_before_batch_transfer({"obs": torch.zeros(1)}, 0).keys() == {"obs"}
-    assert tiny_sold.timings.summary() == {"replay_buffer/sample": 2.0}
-
-
-def test_on_load_checkpoint_without_replay_buffer(tiny_sold, tmp_path):
-    tiny_sold.on_load_checkpoint({"num_steps": 300, "num_episodes": 12})
-    assert (tiny_sold.num_steps, tiny_sold.num_episodes) == (300, 11)
-    tiny_sold.on_load_checkpoint({"num_steps": 5, "num_episodes": 1, "replay_buffer_path": tmp_path / "gone"})
-    assert tiny_sold.num_steps == 5 and not hasattr(tiny_sold, "replay_buffer")
-
-
-def test_on_load_checkpoint_rejects_buffer_without_fields(tiny_sold, tmp_path):
-    from sold.data.info import EpisodeDatasetInfo
-
-    tiny_sold._trainer = mock.Mock()
-    with mock.patch.object(
-        type(tiny_sold), "logger", new_callable=mock.PropertyMock, return_value=SimpleNamespace(log_dir=str(tmp_path))
-    ):
-        with pytest.raises(ValueError, match="without fields"):
-            tiny_sold.on_load_checkpoint(
-                {
-                    "num_steps": 5,
-                    "num_episodes": 1,
-                    "replay_buffer_path": tmp_path,
-                    "replay_buffer_info": EpisodeDatasetInfo(),
-                }
-            )
-
-
+# ----------------------------------------------------------------------------- training runs
 def _fit(tmp_path, save_replay_buffer=True, **overrides):
     sold = make_tiny_sold(save_replay_buffer=save_replay_buffer, **overrides)
-    trainer = make_online_trainer(tmp_path)
-    trainer.fit(sold)
-    return sold, trainer
+    logger = fit_sold(sold, tmp_path)
+    return sold, logger
 
 
 @pytest.fixture(scope="module")
 def fitted(tmp_path_factory):
     tmp_path = tmp_path_factory.mktemp("fit")
     torch.manual_seed(0)
-    sold, trainer = _fit(tmp_path)
-    return sold, trainer, Path(trainer.logger.log_dir)
+    sold, logger = _fit(tmp_path)
+    return sold, Path(logger.log_dir)
 
 
 def test_fit_collects_until_max_steps(fitted):
-    sold, trainer, _ = fitted
-    assert sold.num_steps == 40 and trainer.should_stop
+    sold, _ = fitted
+    assert sold.num_steps == 40
     # 40 steps of 8-step episodes, plus the initial reset.
     assert sold.num_episodes == 4
     assert sold.replay_buffer.num_episodes == 5 and sold.replay_buffer.num_timesteps == 45
-    assert trainer.global_step > 0
+    assert len(sold.optimizers) == 4
+
+
+def test_fit_stops_after_the_seed_round_when_max_steps_is_reached(tmp_path):
+    sold, logger = _fit(tmp_path, max_steps=10)  # num_seed is 10: no round of updates follows.
+    assert sold.num_steps == 10
+    assert not any("train/dynamics_loss" in record for record in read_metrics(logger.log_dir))
 
 
 def test_fit_evaluates_and_checkpoints(fitted):
-    _, _, log_dir = fitted
+    _, log_dir = fitted
     checkpoints = sorted(p.name for p in (log_dir / "checkpoints").glob("*.ckpt"))
     assert len(checkpoints) == 2
     assert checkpoints[0].startswith("sold-steps=0-episode=0-eval_episode_return=")
@@ -237,7 +233,7 @@ def test_fit_evaluates_and_checkpoints(fitted):
 
 
 def test_fit_keeps_only_the_latest_replay_buffer_copy(fitted):
-    _, _, log_dir = fitted
+    _, log_dir = fitted
     copies = sorted(p.name for p in (log_dir / "checkpoints").glob("replay_buffer-steps=*"))
     assert copies == ["replay_buffer-steps=24-episode=3"]
     assert sorted(os.listdir(log_dir / "checkpoints" / copies[0])) == ["action.dat", "obs.dat", "reward.dat"]
@@ -245,11 +241,12 @@ def test_fit_keeps_only_the_latest_replay_buffer_copy(fitted):
     assert checkpoint["num_steps"] == 24 and checkpoint["num_episodes"] == 3
     assert Path(checkpoint["replay_buffer_path"]).name == copies[0]
     assert checkpoint["replay_buffer_capacity"] == 300 and checkpoint["replay_buffer_info"].num_episodes == 3
+    assert set(checkpoint) >= {"state_dict", "optimizer_states", "hyper_parameters"}
 
 
 def test_fit_logs_metrics(fitted):
-    _, _, log_dir = fitted
-    records = [json.loads(line) for line in open(log_dir / "metrics" / "metrics.jsonl")]
+    _, log_dir = fitted
+    records = read_metrics(log_dir)
     keys = set().union(*records)
     assert {
         "eval/episode_return",
@@ -264,7 +261,7 @@ def test_fit_logs_metrics(fitted):
     } <= keys
     timed = {
         *(f"collect/{name}" for name in ["action_selection", "env_step", "env_reset"]),
-        *(f"replay_buffer/{name}" for name in ["add_step", "sample", "batch_wait"]),
+        *(f"replay_buffer/{name}" for name in ["add_step", "sample"]),
         *(f"learn/{name}" for name in ["autoencoder", "imagination", "training_step", "visualization", "logging"]),
         *(
             f"learn/{model}_{part}"
@@ -289,14 +286,17 @@ def test_fit_logs_metrics(fitted):
         assert any(image.startswith(name + "-step=") for image in images), name
 
 
-def test_fit_progress_bar_is_created(fitted):
-    _, trainer, _ = fitted
-    bar = next(c for c in trainer.callbacks if isinstance(c, OnlineProgressBar))
-    assert bar.progress is not None or not bar.is_enabled
+def test_fit_resumes_from_its_own_checkpoint(fitted, tmp_path):
+    _, log_dir = fitted
+    latest = sorted((log_dir / "checkpoints").glob("*.ckpt"))[-1]
+    sold = make_tiny_sold(max_steps=50)
+    fit_sold(sold, tmp_path, checkpoint=latest)
+    assert sold.num_steps == 54 and sold.num_episodes >= 3  # Rounds of 5 steps from step 24, until 50 is reached.
+    assert sold.replay_buffer.num_episodes > 3  # The saved buffer (3 episodes) plus the new ones.
 
 
 def test_fit_without_saving_replay_buffer_and_with_finetuning(tmp_path):
-    sold, trainer = _fit(
+    sold, logger = _fit(
         tmp_path,
         save_replay_buffer=False,
         finetune_autoencoder=True,
@@ -305,76 +305,81 @@ def test_fit_without_saving_replay_buffer_and_with_finetuning(tmp_path):
         num_context=(1, 2),
     )
     assert sold.num_steps == 20
-    assert not list(Path(trainer.logger.log_dir, "checkpoints").glob("replay_buffer-*"))
-    records = [json.loads(line) for line in open(Path(trainer.logger.log_dir) / "metrics" / "metrics.jsonl")]
-    assert "timing/learn/autoencoder_update_ms" in set().union(*records)
-    checkpoint = torch.load(next(Path(trainer.logger.log_dir, "checkpoints").glob("*.ckpt")), weights_only=False)
+    assert not list(Path(logger.log_dir, "checkpoints").glob("replay_buffer-*"))
+    assert "timing/learn/autoencoder_update_ms" in set().union(*read_metrics(logger.log_dir))
+    checkpoint = torch.load(next(Path(logger.log_dir, "checkpoints").glob("*.ckpt")), weights_only=False)
     assert "replay_buffer_path" not in checkpoint
 
 
 def test_fit_without_profiling_logs_no_timings(tmp_path):
-    _, trainer = _fit(tmp_path, max_steps=20, profile=False)
-    records = [json.loads(line) for line in open(Path(trainer.logger.log_dir) / "metrics" / "metrics.jsonl")]
+    _, logger = _fit(tmp_path, max_steps=20, profile=False)
+    records = read_metrics(logger.log_dir)
     assert records and not any(key.startswith("timing/") for key in set().union(*records))
 
 
-def test_save_replay_buffer_when_buffer_folder_is_missing(tiny_sold, tmp_path):
-    tiny_sold.save_replay_buffer = True
+# ----------------------------------------------------------------------------- checkpoints
+def test_load_counters(tiny_sold):
+    tiny_sold.load_counters({"num_steps": 300, "num_episodes": 12})
+    assert (tiny_sold.num_steps, tiny_sold.num_episodes) == (300, 11)
+
+
+def _resume_checkpoint(tiny_sold, **extra):
+    return {"state_dict": tiny_sold.state_dict(), "optimizer_states": [], "num_steps": 5, "num_episodes": 1, **extra}
+
+
+def test_restore_rejects_a_wrong_number_of_optimizer_states(tiny_sold):
+    tiny_sold.optimizers = tiny_sold.configure_optimizers()
+    with pytest.raises(ValueError, match="0 optimizer states for 4 optimizers"):
+        tiny_sold.restore(_resume_checkpoint(tiny_sold))
+
+
+def test_restore_without_replay_buffer(tiny_sold, tmp_path):
+    tiny_sold.restore(_resume_checkpoint(tiny_sold))
+    assert (tiny_sold.num_steps, tiny_sold.num_episodes) == (5, 0)
+    tiny_sold.restore(_resume_checkpoint(tiny_sold, replay_buffer_path=tmp_path / "gone"))
+    assert tiny_sold.replay_buffer is None
+
+
+def test_restore_rejects_buffer_without_fields(tiny_sold, tmp_path):
+    from sold.data.info import EpisodeDatasetInfo
+
+    with pytest.raises(ValueError, match="without fields"):
+        tiny_sold.restore(
+            _resume_checkpoint(tiny_sold, replay_buffer_path=tmp_path, replay_buffer_info=EpisodeDatasetInfo())
+        )
+
+
+def _stub_replay_buffer(tiny_sold, tmp_path, save_path):
+    """A module logging under tmp_path whose replay buffer lives at save_path (its checkpoints go to checkpoints/)."""
+    tiny_sold.logger = SimpleNamespace(log_dir=str(tmp_path))
     tiny_sold.replay_buffer = SimpleNamespace(
-        save_path=str(tmp_path / "missing"), capacity=1, info=None, head=0, tail=0, episode_boundaries=[]
+        save_path=str(save_path), capacity=1, info=None, head=0, tail=0, episode_boundaries=[]
     )
-    with mock.patch.object(type(tiny_sold), "checkpoints_dir", new_callable=mock.PropertyMock, return_value=tmp_path):
-        checkpoint = {}
-        tiny_sold.on_save_checkpoint(checkpoint)
-    assert checkpoint["replay_buffer_path"] == tmp_path / "replay_buffer-steps=0-episode=-1"
-    assert not checkpoint["replay_buffer_path"].exists()
+
+
+def test_replay_buffer_checkpoint_when_buffer_folder_is_missing(tiny_sold, tmp_path):
+    _stub_replay_buffer(tiny_sold, tmp_path, tmp_path / "missing")
+    checkpoint = tiny_sold.replay_buffer_checkpoint()
+    assert checkpoint["replay_buffer_path"] == tmp_path / "checkpoints" / "replay_buffer-steps=0-episode=-1"
+    assert not checkpoint["replay_buffer_path"].exists() and checkpoint["replay_buffer_capacity"] == 1
 
 
 def test_checkpoints_dir_is_created_under_log_dir(tiny_sold, tmp_path):
-    with mock.patch.object(
-        type(tiny_sold), "logger", new_callable=mock.PropertyMock, return_value=SimpleNamespace(log_dir=str(tmp_path))
-    ):
-        assert tiny_sold.checkpoints_dir == tmp_path / "checkpoints" and (tmp_path / "checkpoints").is_dir()
+    tiny_sold.logger = SimpleNamespace(log_dir=str(tmp_path))
+    assert tiny_sold.checkpoints_dir == tmp_path / "checkpoints" and (tmp_path / "checkpoints").is_dir()
 
 
-def test_abstract_select_action_body():
-    assert training.OnlineModule.select_action(None, None) is None
-
-
-def test_save_replay_buffer_replaces_the_previous_copy(tiny_sold, tmp_path):
+# BUGS_AND_PITFALLS.md #5 (fixed): the previous copy is removed even where text order would put it last.
+def test_replay_buffer_checkpoint_replaces_the_previous_copy(tiny_sold, tmp_path):
     live = tmp_path / "live"
     live.mkdir()
     (live / "obs.dat").write_bytes(b"new")
-    old = tmp_path / "checkpoints" / "replay_buffer-steps=5-episode=1"
-    old.mkdir(parents=True)
-    tiny_sold.save_replay_buffer, tiny_sold.num_steps, tiny_sold.num_episodes = True, 7, 2
-    tiny_sold.replay_buffer = SimpleNamespace(
-        save_path=str(live), capacity=1, info=None, head=0, tail=0, episode_boundaries=[]
-    )
-    with mock.patch.object(
-        type(tiny_sold), "checkpoints_dir", new_callable=mock.PropertyMock, return_value=tmp_path / "checkpoints"
-    ):
-        tiny_sold.on_save_checkpoint({})
-    assert [p.name for p in (tmp_path / "checkpoints").iterdir()] == ["replay_buffer-steps=7-episode=2"]
-    assert (tmp_path / "checkpoints" / "replay_buffer-steps=7-episode=2" / "obs.dat").read_bytes() == b"new"
-
-
-def test_on_load_checkpoint_without_trainer_ignores_the_replay_buffer(tiny_sold, tmp_path):
-    (tmp_path / "saved").mkdir()  # Exists, but there is no trainer (and no logger directory) to restore into (#6).
-    tiny_sold.on_load_checkpoint({"num_steps": 5, "num_episodes": 1, "replay_buffer_path": tmp_path / "saved"})
-    assert tiny_sold.num_steps == 5 and not hasattr(tiny_sold, "replay_buffer")
-
-
-# BUGS_AND_PITFALLS.md #3a (fixed).
-def test_progress_bar_creates_its_display_on_train_start(tiny_sold):
-    from lightning import Trainer
-
-    bar = OnlineProgressBar()
-    trainer = Trainer(accelerator="cpu", logger=False, callbacks=[bar], enable_model_summary=False)
-    bar.setup(trainer, tiny_sold, stage="fit")
-    bar.on_train_start(trainer, tiny_sold)
-    # Lightning >= 2.5.3 calls on_train_batch_end -> _add_task, which asserts that the display exists.
-    assert bar.progress is not None
+    (tmp_path / "checkpoints" / "replay_buffer-steps=9000-episode=180").mkdir(parents=True)
+    _stub_replay_buffer(tiny_sold, tmp_path, live)
+    tiny_sold.num_steps, tiny_sold.num_episodes = 10500, 210
+    checkpoint = tiny_sold.replay_buffer_checkpoint()
+    assert [p.name for p in (tmp_path / "checkpoints").iterdir()] == ["replay_buffer-steps=10500-episode=210"]
+    assert (checkpoint["replay_buffer_path"] / "obs.dat").read_bytes() == b"new"
 
 
 # BUGS_AND_PITFALLS.md #4 (fixed).
@@ -383,55 +388,29 @@ def test_resuming_restores_the_saved_replay_buffer(tiny_sold, tmp_path):
 
     saved = RingBufferDataset(20, 2, 3, save_path=str(tmp_path / "saved"))
     add_episode(saved, make_episode(5))
-    checkpoint = {
-        "num_steps": 5,
-        "num_episodes": 1,
-        "replay_buffer_path": tmp_path / "saved",
-        "replay_buffer_capacity": 20,
-        "replay_buffer_info": saved.info,
-        "replay_buffer_head": saved.head,
-        "replay_buffer_tail": saved.tail,
-        "replay_buffer_episode_boundaries": saved.episode_boundaries,
-    }
-    tiny_sold._trainer = mock.Mock()  # Resuming happens inside trainer.fit (see #6 for the case without one).
-    with mock.patch.object(
-        type(tiny_sold),
-        "logger",
-        new_callable=mock.PropertyMock,
-        return_value=SimpleNamespace(log_dir=str(tmp_path / "run")),
-    ):
-        tiny_sold.on_load_checkpoint(checkpoint)
+    checkpoint = _resume_checkpoint(
+        tiny_sold,
+        replay_buffer_path=tmp_path / "saved",
+        replay_buffer_capacity=20,
+        replay_buffer_info=saved.info,
+        replay_buffer_head=saved.head,
+        replay_buffer_tail=saved.tail,
+        replay_buffer_episode_boundaries=saved.episode_boundaries,
+    )
+    tiny_sold.replay_buffer = RingBufferDataset(20, 2, 3, save_path=str(tmp_path / "run"))
+    tiny_sold.restore(checkpoint)
     assert tiny_sold.replay_buffer.num_episodes == 1 and tiny_sold.replay_buffer.tail == 5
     assert np.array_equal(tiny_sold.replay_buffer.ring_buffer["obs"], saved.ring_buffer["obs"])
 
 
-# BUGS_AND_PITFALLS.md #5 (fixed).
-def test_pruning_keeps_the_newest_replay_buffer(tiny_sold, tmp_path):
-    checkpoints_dir = tmp_path / "checkpoints"
-    (checkpoints_dir / "replay_buffer-steps=9000-episode=180").mkdir(parents=True)
-    live = tmp_path / "live"
-    live.mkdir()
-    (live / "obs.dat").write_bytes(b"x")
-    tiny_sold.save_replay_buffer, tiny_sold.num_steps, tiny_sold.num_episodes = True, 10500, 210
-    tiny_sold.replay_buffer = SimpleNamespace(
-        save_path=str(live), capacity=1, info=None, head=0, tail=0, episode_boundaries=[]
-    )
-    checkpoint = {}
-    with mock.patch.object(
-        type(tiny_sold), "checkpoints_dir", new_callable=mock.PropertyMock, return_value=checkpoints_dir
-    ):
-        tiny_sold.on_save_checkpoint(checkpoint)
-    assert [p.name for p in checkpoints_dir.iterdir()] == ["replay_buffer-steps=10500-episode=210"]
-    assert checkpoint["replay_buffer_path"].exists()
-
-
 # BUGS_AND_PITFALLS.md #6 (fixed).
-def test_latest_checkpoint_loads_without_a_trainer(fitted):
+def test_latest_checkpoint_loads_without_training_state(fitted):
     from sold.train_sold import SOLDModule
 
-    _, _, log_dir = fitted
+    _, log_dir = fitted
     checkpoints_dir = log_dir / "checkpoints"
     assert list(checkpoints_dir.glob("replay_buffer-*")), "precondition: the replay buffer copy exists"
     latest = sorted(checkpoints_dir.glob("*.ckpt"))[-1]
-    loaded = SOLDModule.load_from_checkpoint(latest, env=fakes.make_fake_env())  # As evaluate_sold.py does.
+    loaded = SOLDModule.load(latest, env=fakes.make_fake_env(), max_steps=99)  # As evaluate_sold.py does.
     assert loaded.num_steps == torch.load(latest, weights_only=False)["num_steps"]
+    assert loaded.max_steps == 99 and loaded.replay_buffer is None and loaded.optimizers == []

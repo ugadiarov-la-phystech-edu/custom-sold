@@ -1,4 +1,4 @@
-"""datasets: field descriptions, the replay ring buffer, NumUpdatesWrapper and SAVi image datasets."""
+"""datasets: field descriptions, the replay ring buffer, sample_batches and SAVi image datasets."""
 
 from collections import deque
 import copy
@@ -8,7 +8,7 @@ import pytest
 from sold.data.image import ImageDataset, NPZDataset, PNGDataset, load_image_dataset
 from sold.data.info import ColorImage, EpisodeDatasetInfo, Fields, FieldType, Scalar, TensorType, Vector
 from sold.data.ring_buffer import EpisodeDataset, RingBufferDataset
-from sold.data.utils import NumUpdatesWrapper
+from sold.data.utils import sample_batches
 from tests.conftest import add_episode, make_episode, write_image_dataset
 import torch
 
@@ -197,25 +197,22 @@ def test_episode_dataset_is_abstract(tmp_path):
         EpisodeDataset.sample(dataset)
 
 
-def test_num_updates_wrapper(buffer):
-    assert list(NumUpdatesWrapper(buffer, 3)) == []
+def test_sample_batches(buffer):
+    assert list(sample_batches(buffer, 3)) == []
     add_episode(buffer, make_episode(4))
-    batches = list(NumUpdatesWrapper(buffer, 3))
+    batches = list(sample_batches(buffer, 3))
     assert len(batches) == 3 and batches[0]["obs"].shape == (4, 3, 3, 2, 2)
-    assert "sample_seconds" not in batches[0]
-    timed = next(iter(NumUpdatesWrapper(buffer, 1, measure_sampling=True)))
-    assert timed["sample_seconds"].dtype == torch.float64 and timed["sample_seconds"] >= 0
 
 
-def test_num_updates_wrapper_samples_from_one_seed_per_epoch(buffer):
+def test_sample_batches_draw_one_seed_per_round(buffer):
     add_episode(buffer, make_episode(4))
     torch.manual_seed(1)
-    first = [batch["obs"] for batch in NumUpdatesWrapper(buffer, 2)]
+    first = [batch["obs"] for batch in sample_batches(buffer, 2)]
     torch.manual_seed(1)
-    torch.empty((), dtype=torch.int64).random_()  # The one draw of the global RNG per epoch, as a worker's seed.
+    torch.empty((), dtype=torch.int64).random_()  # The one draw of the global RNG per round, as a worker's seed was.
     state = torch.get_rng_state()
     torch.manual_seed(1)
-    assert all(torch.equal(a, b) for a, b in zip(first, (batch["obs"] for batch in NumUpdatesWrapper(buffer, 2))))
+    assert all(torch.equal(a, b) for a, b in zip(first, (batch["obs"] for batch in sample_batches(buffer, 2))))
     assert torch.equal(torch.get_rng_state(), state)
 
 

@@ -71,7 +71,7 @@ def load_sold(checkpoint_path, image_size=(64, 64), action_dim=4, max_episode_st
     from sold.train_sold import SOLDModule
 
     env = _sold_env(image_size, action_dim, max_episode_steps)
-    return SOLDModule.load_from_checkpoint(str(checkpoint_path), env=env, map_location="cpu", **overrides)
+    return SOLDModule.load(checkpoint_path, env=env, map_location="cpu", **overrides)
 
 
 def load_legacy_sold(**overrides):
@@ -141,7 +141,7 @@ def tiny_sold_losses():
 
 def tiny_sold_training():
     """Parameters of the tiny SOLD after 20 environment steps of training with fine-tuning (five optimizers)."""
-    from tests.conftest import make_online_trainer, make_tiny_sold
+    from tests.conftest import fit_sold, make_tiny_sold
     from tests.fakes import make_fake_env
 
     torch.manual_seed(0)
@@ -149,7 +149,7 @@ def tiny_sold_training():
     env.action_space.seed(0)  # Seed-phase actions come from gym's own generator.
     sold = make_tiny_sold(env, finetune_autoencoder=True, max_steps=20)
     with tempfile.TemporaryDirectory() as tmp_dir:
-        make_online_trainer(Path(tmp_dir)).fit(sold)
+        fit_sold(sold, Path(tmp_dir))
     names = ["autoencoder", "dynamics_predictor", "reward_predictor", "actor", "critic", "critic_target"]
     outputs = {name: torch.cat([p.detach().flatten() for p in getattr(sold, name).parameters()]) for name in names}
     outputs["return_moments"] = torch.stack([sold.return_moments.low, sold.return_moments.high])
@@ -167,14 +167,13 @@ def compute_all():
 
 def generate_legacy_checkpoint():
     """Train the tiny SOLD for a few steps with fine-tuning and save it (see the module docstring)."""
-    from tests.conftest import make_online_trainer, make_tiny_sold
+    from tests.conftest import fit_sold, make_tiny_sold
 
     torch.manual_seed(0)
     sold = make_tiny_sold(finetune_autoencoder=True, max_steps=20)
     with tempfile.TemporaryDirectory() as tmp_dir:
-        trainer = make_online_trainer(Path(tmp_dir))
-        trainer.fit(sold)
-        trainer.save_checkpoint(LEGACY_CHECKPOINT)
+        fit_sold(sold, Path(tmp_dir))
+    sold.save_checkpoint(LEGACY_CHECKPOINT)
     print(f"wrote {LEGACY_CHECKPOINT}")
 
 

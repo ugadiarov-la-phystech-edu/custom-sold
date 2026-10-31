@@ -1,0 +1,6 @@
+tensorboard:
+  _target_: sold.utils.logging.MetricsWriter.create
+  name: "logs"
+  save_dir: ../experiments/${hydra:job.config_name}/${experiment}/${now:%Y-%m-%d_%H-%M-%S}
+
+log_to_wandb: False  # Whether to sync Tensorboard logs to Weights & Biases.

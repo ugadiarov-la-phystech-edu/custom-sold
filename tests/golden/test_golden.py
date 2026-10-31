@@ -1,7 +1,7 @@
 """Compare outputs of the released checkpoints and of SOLD's losses with stored references (see references.py)."""
 
 import pytest
-from tests.conftest import make_online_trainer, require_checkpoint
+from tests.conftest import fit_sold, require_checkpoint
 from tests.golden import references
 import torch
 
@@ -51,12 +51,11 @@ def test_legacy_sold_checkpoint_resumes_training(tmp_path):
     num_steps = torch.load(references.LEGACY_CHECKPOINT, map_location="cpu", weights_only=False)["num_steps"]
     sold = references.load_legacy_sold(max_steps=num_steps + 10)
     assert sold.finetune_autoencoder
-    trainer = make_online_trainer(tmp_path)
-    trainer.fit(sold, ckpt_path=references.LEGACY_CHECKPOINT)
+    fit_sold(sold, tmp_path, checkpoint=references.LEGACY_CHECKPOINT)
     assert sold.num_steps == num_steps + 10
-    assert len(trainer.optimizers) == 5  # Fine-tuning adds the autoencoder's optimizer, restored from the checkpoint.
+    assert len(sold.optimizers) == 5  # Fine-tuning adds the autoencoder's optimizer, restored from the checkpoint.
     # Saved again, it is in the current format and loads.
-    trainer.save_checkpoint(tmp_path / "resaved.ckpt")
+    sold.save_checkpoint(tmp_path / "resaved.ckpt")
     resaved = torch.load(tmp_path / "resaved.ckpt", map_location="cpu", weights_only=False)["hyper_parameters"]
     assert "optimization" in resaved and "dynamics_learning_rate" not in resaved
     assert references.load_sold(tmp_path / "resaved.ckpt", image_size=(16, 16), action_dim=2, max_episode_steps=8)

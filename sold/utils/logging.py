@@ -5,10 +5,72 @@ from lightning.fabric.utilities.types import _PATH
 from lightning.pytorch.loggers import TensorBoardLogger
 import numpy as np
 import os
+import re
 import torch
+from torch.utils.tensorboard import SummaryWriter
 from torchvision.io import write_video
 from torchvision.utils import save_image
 from typing import Any
+
+
+def scalar(value: torch.Tensor | float) -> float:
+    """A metric as a float, through the default float dtype like LightningModule.log (45 is written as 45.0)."""
+    tensor = value if torch.is_tensor(value) else torch.tensor(value, dtype=torch.get_default_dtype())
+    return tensor.item()
+
+
+class MetricsWriter:
+    """Scalars, images and videos of a run: TensorBoard events plus metrics/metrics.jsonl, images/ and videos/."""
+
+    def __init__(self, log_dir: str, experiment: SummaryWriter | None = None) -> None:
+        self.log_dir = log_dir
+        self.save_dirs = {subdir: os.path.join(log_dir, subdir) for subdir in ["metrics", "images", "videos"]}
+        for path in self.save_dirs.values():
+            os.makedirs(path, exist_ok=True)
+        self.experiment = experiment if experiment is not None else SummaryWriter(log_dir)
+        self.current_step = 0
+        self.accumulated_metrics: dict[str, float] = {}
+        self.metrics_file = open(os.path.join(self.save_dirs["metrics"], "metrics.jsonl"), mode="a")
+
+    @classmethod
+    def create(cls, save_dir: str, name: str = "logs") -> "MetricsWriter":
+        """A writer for a new save_dir/name/version_N (the layout of Lightning's TensorBoardLogger)."""
+        root = os.path.join(save_dir, name)
+        existing = os.listdir(root) if os.path.isdir(root) else []
+        versions = [int(match.group(1)) for entry in existing if (match := re.fullmatch(r"version_(\d+)", entry))]
+        return cls(os.path.join(root, f"version_{max(versions, default=-1) + 1}"))
+
+    def log_metrics(self, metrics: Mapping[str, Any], step: int) -> None:
+        values = {name: scalar(value) for name, value in metrics.items()}
+        for name, value in values.items():
+            self.experiment.add_scalar(name, value, step)
+        if step > self.current_step:
+            self._flush_metrics()
+        self.current_step = step
+        self.accumulated_metrics.update(values)
+
+    def finalize(self) -> None:
+        self._flush_metrics()  # Otherwise the metrics of the last step never reach metrics.jsonl.
+        self.experiment.flush()
+
+    def _flush_metrics(self) -> None:
+        if self.accumulated_metrics:
+            record = {"step": self.current_step, **self.accumulated_metrics}
+            self.metrics_file.write(json.dumps(record) + "\n")
+            self.metrics_file.flush()
+            self.accumulated_metrics.clear()
+
+    def log_image(self, name: str, image: torch.Tensor, step: int) -> None:
+        self.experiment.add_image(name, image, step)
+        save_image(image, os.path.join(self.save_dirs["images"], name) + f"-step={step}.png")
+
+    def log_video(self, name: str, video: torch.Tensor, step: int, fps: int = 10) -> None:
+        if video.dtype != torch.uint8:
+            video = (video * 255).to(torch.uint8)
+
+        self.experiment.add_video(name, np.expand_dims(video.cpu().numpy(), 0), global_step=step)
+        name = name.replace("/", "_")  # Turn tensorboard grouping into valid file name.
+        write_video(os.path.join(self.save_dirs["videos"], name) + f"-step={step}.mp4", video.permute(0, 2, 3, 1), fps)
 
 
 class LoggingStepMixin:
@@ -36,9 +98,7 @@ class LoggingStepMixin:
         if isinstance(self.logger, ExtendedTensorBoardLogger):
             if kwargs.get("logger", True) and self.is_logging_step(name):
                 self.last_logging_step[name] = self.logging_step
-                # Through the default float dtype, as in LightningModule.log (45 is written as 45.0).
-                tensor = value if torch.is_tensor(value) else torch.tensor(value, dtype=torch.get_default_dtype())
-                self.logger.log_metrics({name: tensor.item()}, step=self.logging_step)
+                self.logger.log_metrics({name: scalar(value)}, step=self.logging_step)
             kwargs["logger"] = False  # Written above; Lightning still gets it for the progress bar and callbacks.
         super().log(name, value, *args, **kwargs)
 
@@ -52,16 +112,10 @@ class LoggingStepMixin:
         if isinstance(self.logger, ExtendedTensorBoardLogger):
             self.logger.log_video(name, video, step=self.logging_step)
 
-    def log_gradients(self, model_names: tuple[str, ...]) -> None:
-        for model_name in model_names:
-            if not self.is_logging_step(f"gradients/{model_name}"):
-                continue
-            model = getattr(self, model_name)
-            grads = [param.grad.detach().flatten() for param in model.parameters() if param.grad is not None]
-            self.log(f"gradients/{model_name}", torch.cat(grads).norm())
-
 
 class ExtendedTensorBoardLogger(TensorBoardLogger):
+    """Lightning's TensorBoard logger (SAVi training) with a MetricsWriter's metrics.jsonl, images/ and videos/."""
+
     def __init__(
         self,
         save_dir: _PATH,
@@ -74,42 +128,17 @@ class ExtendedTensorBoardLogger(TensorBoardLogger):
         **kwargs: Any,
     ):
         super().__init__(save_dir, name, version, log_graph, default_hp_metric, prefix, sub_dir, **kwargs)
-
-        self.save_dirs = {}
-        for subdir in ["metrics", "images", "videos"]:
-            self.save_dirs[subdir] = os.path.join(self.log_dir, subdir)
-            os.makedirs(self.save_dirs[subdir], exist_ok=True)
-
-        self.current_step = 0
-        self.accumulated_metrics = {}
-        self.metrics_file = open(os.path.join(self.save_dirs["metrics"], "metrics.jsonl"), mode="a")
+        self.writer = MetricsWriter(self.log_dir, self.experiment)
 
     def log_metrics(self, metrics: Mapping[str, float], step: int) -> None:
-        super().log_metrics(metrics, step)
-        if self.current_step is not None and step > self.current_step:
-            self._flush_metrics()
-        self.current_step = step
-        self.accumulated_metrics.update(metrics)
+        self.writer.log_metrics(metrics, step)
 
     def finalize(self, status: str) -> None:
+        self.writer.finalize()
         super().finalize(status)
-        self._flush_metrics()  # Otherwise the metrics of the last step never reach metrics.jsonl.
-
-    def _flush_metrics(self) -> None:
-        if self.accumulated_metrics:
-            record = {"step": self.current_step, **self.accumulated_metrics}
-            self.metrics_file.write(json.dumps(record) + "\n")
-            self.metrics_file.flush()
-            self.accumulated_metrics.clear()
 
     def log_image(self, name: str, image: torch.Tensor, step: int) -> None:
-        self.experiment.add_image(name, image, step)
-        save_image(image, os.path.join(self.save_dirs["images"], name) + f"-step={step}.png")
+        self.writer.log_image(name, image, step)
 
     def log_video(self, name: str, video: torch.Tensor, step: int, fps: int = 10) -> None:
-        if video.dtype != torch.uint8:
-            video = (video * 255).to(torch.uint8)
-
-        self.experiment.add_video(name, np.expand_dims(video.cpu().numpy(), 0), global_step=step)
-        name = name.replace("/", "_")  # Turn tensorboard grouping into valid file name.
-        write_video(os.path.join(self.save_dirs["videos"], name) + f"-step={step}.mp4", video.permute(0, 2, 3, 1), fps)
+        self.writer.log_video(name, video, step, fps)

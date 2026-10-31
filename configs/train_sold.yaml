@@ -1,16 +1,15 @@
 # @package _global_
 defaults:
   - environment@model.env: reach_red  # e.g. environment@model.env=push_red
-  - callbacks: sold
   - hydra: default
-  - logger: tensorboard
-  - trainer: online
+  - logger: sold
   - _self_
   - preset: null  # Run setup from configs/preset/, e.g. preset=pick_red_finetune.
 
 checkpoint: ""
 experiment: "my_experiment"
 seed: 42
+device: auto  # "cuda", "cpu" or "auto" (the GPU when there is one).
 float32_matmul_precision: high  # TF32 matmuls on GPUs; "highest" for full float32.
 
 model:

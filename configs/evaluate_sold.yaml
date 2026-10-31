@@ -7,3 +7,4 @@ checkpoint_path: "CHECKPOINT_PATH(S)"  # Can be one checkpoint or a directory of
 experiment: "my_experiment"
 eval_episodes: 5
 seed: 42
+device: auto

@@ -7,7 +7,7 @@ SOLD_RUN_CHECKPOINTS: a folder of <name>.ckpt files whose <name>.pt references w
 import os
 from pathlib import Path
 import pytest
-from tests.conftest import make_online_trainer
+from tests.conftest import fit_sold
 from tests.golden import references
 from tests.golden.test_golden import TOLERANCE
 import torch
@@ -43,6 +43,5 @@ def test_run_checkpoint_resumes_training(checkpoint, tmp_path):
         eval_freq=10**9,
         save_replay_buffer=False,
     )
-    trainer = make_online_trainer(tmp_path)
-    trainer.fit(sold, ckpt_path=checkpoint)
-    assert sold.num_steps == saved["num_steps"] + 50 and trainer.global_step > 0
+    fit_sold(sold, tmp_path, checkpoint=checkpoint)
+    assert sold.num_steps == saved["num_steps"] + 50

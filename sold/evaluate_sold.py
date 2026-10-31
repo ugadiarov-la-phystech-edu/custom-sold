@@ -4,7 +4,7 @@ import json
 from omegaconf import DictConfig
 import os
 from sold.train_sold import SOLDModule
-from sold.utils.training import set_seed
+from sold.utils.training import resolve_device, set_seed
 import torch
 from torchvision import transforms
 from torchvision.io import write_video
@@ -33,10 +33,11 @@ def evaluate(cfg: DictConfig):
     set_seed(cfg.seed)
     output_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
     checkpoint_files = get_checkpoint_files(cfg.checkpoint_path)
+    device = resolve_device(cfg.device)
 
     for checkpoint in tqdm(checkpoint_files, disable=len(checkpoint_files) == 1, desc="Evaluating checkpoints"):
         env = hydra.utils.instantiate(cfg.env)
-        sold = SOLDModule.load_from_checkpoint(checkpoint, env=env)
+        sold = SOLDModule.load(checkpoint, env=env, map_location=device).to(device)
 
         # Log behavior videos.
         videos_dir = os.path.join(output_dir, "videos")

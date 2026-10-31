@@ -9,7 +9,7 @@ from sold.modeling.autoencoder.losses import reconstruction_loss
 from sold.modeling.distributions import TwoHotEncodingDistribution
 from sold.train_sold import OptimizerSettings, SOLDModule, optimization_settings
 from tests import fakes
-from tests.conftest import make_online_trainer, make_tiny_sold, tiny_sold_kwargs
+from tests.conftest import fit_sold, make_tiny_sold, tiny_sold_kwargs
 import torch
 import torch.nn.functional as F
 
@@ -34,9 +34,9 @@ def _batch(sold, batch_size=2):
 
 def test_construction(tiny_sold):
     assert (tiny_sold.min_num_context, tiny_sold.max_num_context) == (2, 2)
-    assert tiny_sold.sequence_length == 5 and tiny_sold.automatic_optimization is False
+    assert tiny_sold.sequence_length == 5
     assert torch.allclose(tiny_sold.discounts, 0.96 ** torch.arange(3.0).unsqueeze(0))
-    assert "env" not in tiny_sold.hparams and tiny_sold.hparams.imagination_horizon == 3
+    assert "env" not in tiny_sold.hparams and tiny_sold.hparams["imagination_horizon"] == 3
     assert tiny_sold.critic_target is not tiny_sold.critic
     for a, b in zip(tiny_sold.critic.parameters(), tiny_sold.critic_target.parameters()):
         assert torch.equal(a, b)
@@ -78,7 +78,7 @@ def test_imagine_ahead_with_batch_size_one(tiny_sold):
 def test_optimizer_settings_are_grouped_per_model(tiny_sold):
     assert tiny_sold.optimizer_settings["dynamics"] == OptimizerSettings(learning_rate=1e-3, grad_clip=3.0)
     assert tiny_sold.optimizer_settings["autoencoder"].grad_clip == 0.05
-    assert tiny_sold.hparams.optimization["critic"] == {"learning_rate": 1e-3, "grad_clip": 10.0}
+    assert tiny_sold.hparams["optimization"]["critic"] == {"learning_rate": 1e-3, "grad_clip": 10.0}
 
 
 def test_flat_optimizer_settings_of_old_checkpoints_are_grouped():
@@ -91,7 +91,7 @@ def test_flat_optimizer_settings_of_old_checkpoints_are_grouped():
     sold = SOLDModule(optimization=None, **kwargs, **flat)
     assert sold.optimizer_settings["reward"] == OptimizerSettings(learning_rate=1e-3, grad_clip=10.0)
     assert "dynamics_learning_rate" not in sold.hparams  # Checkpoints store the grouped settings.
-    assert sold.hparams.optimization["dynamics"] == {"learning_rate": 1e-3, "grad_clip": 3.0}
+    assert sold.hparams["optimization"]["dynamics"] == {"learning_rate": 1e-3, "grad_clip": 3.0}
 
 
 def test_optimization_settings_reject_unknown_arguments_and_settings():
@@ -232,16 +232,13 @@ def test_visualizations_without_slot_masks():
 def test_training_step_logs_figures_only_after_evaluation(tiny_sold, monkeypatch):
     calls = []
     monkeypatch.setattr(tiny_sold, "log_visualizations", lambda *args: calls.append(args))
-    monkeypatch.setattr(tiny_sold, "log", lambda *args, **kwargs: None)
-    monkeypatch.setattr(tiny_sold, "log_gradients", lambda *args, **kwargs: None)
     monkeypatch.setattr(tiny_sold, "_optimize", lambda *args: None)
-    monkeypatch.setattr(tiny_sold, "optimizers", lambda: [None] * 4)
+    tiny_sold.optimizers = [None] * 4
     images, actions, rewards = _batch(tiny_sold)
-    batch = {"obs": (images * 255).unsqueeze(0), "action": actions.unsqueeze(0), "reward": rewards.unsqueeze(0)}
-    for after_eval in [False, True]:
-        tiny_sold.after_eval = after_eval
-        tiny_sold.training_step(batch, 0)
-    assert len(calls) == 1
+    batch = {"obs": images * 255, "action": actions, "reward": rewards}
+    for visualize in [False, True]:
+        outputs = tiny_sold.training_step(batch, visualize=visualize)
+    assert len(calls) == 1 and {"dynamics_loss", "reward_loss", "actor_loss", "critic_loss"} <= set(outputs)
 
 
 def test_select_action_modes(tiny_sold):
@@ -320,9 +317,8 @@ def test_actions_are_clamped_per_dimension():
 # BUGS_AND_PITFALLS.md #17 (fixed).
 def test_autoencoder_optimizer_state_is_checkpointed(tmp_path):
     sold = make_tiny_sold(finetune_autoencoder=True, max_steps=20)
-    trainer = make_online_trainer(tmp_path)
-    trainer.fit(sold)
-    checkpoint = torch.load(next((Path(trainer.logger.log_dir) / "checkpoints").glob("*.ckpt")), weights_only=False)
+    logger = fit_sold(sold, tmp_path)
+    checkpoint = torch.load(next((Path(logger.log_dir) / "checkpoints").glob("*.ckpt")), weights_only=False)
     saved = sum(len(group["params"]) for state in checkpoint["optimizer_states"] for group in state["param_groups"])
     expected = sum(
         len(list(module.parameters()))
@@ -344,6 +340,5 @@ def test_no_autoencoder_graph_without_finetuning(tmp_path, monkeypatch):
         return outputs
 
     monkeypatch.setattr(train_sold, "reconstruction_loss", recording)
-    trainer = make_online_trainer(tmp_path)
-    trainer.fit(make_tiny_sold(finetune_autoencoder=False, max_steps=15))
+    fit_sold(make_tiny_sold(finetune_autoencoder=False, max_steps=15), tmp_path)
     assert recorded and not any(recorded)
