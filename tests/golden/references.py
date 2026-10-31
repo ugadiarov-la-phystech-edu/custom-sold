@@ -116,11 +116,28 @@ def tiny_sold_losses():
     return {key: torch.as_tensor(value).detach() for key, value in losses.items()}
 
 
+def tiny_sold_training():
+    """Parameters of the tiny SOLD after 20 environment steps of training with fine-tuning (five optimizers)."""
+    from tests.conftest import make_online_trainer, make_tiny_sold
+    from tests.fakes import make_fake_env
+    torch.manual_seed(0)
+    env = make_fake_env()
+    env.action_space.seed(0)  # Seed-phase actions come from gym's own generator.
+    sold = make_tiny_sold(env, finetune_autoencoder=True, max_steps=20)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        make_online_trainer(Path(tmp_dir)).fit(sold)
+    names = ["autoencoder", "dynamics_predictor", "reward_predictor", "actor", "critic", "critic_target"]
+    outputs = {name: torch.cat([p.detach().flatten() for p in getattr(sold, name).parameters()]) for name in names}
+    outputs["return_moments"] = torch.stack([sold.return_moments.low, sold.return_moments.high])
+    return outputs
+
+
 def compute_all():
     references = {name: savi_outputs(REPO_DIR / "checkpoints" / path) for name, path in SAVI_CHECKPOINTS.items()}
     references["sold_reach_red"] = sold_outputs(REPO_DIR / "checkpoints" / SOLD_CHECKPOINT)
     references["legacy_tiny_sold"] = legacy_sold_outputs()
     references["tiny_sold_losses"] = tiny_sold_losses()
+    references["tiny_sold_training"] = tiny_sold_training()
     return references
 
 

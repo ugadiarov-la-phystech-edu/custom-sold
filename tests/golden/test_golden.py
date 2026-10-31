@@ -59,3 +59,7 @@ def test_legacy_sold_checkpoint_resumes_training(tmp_path):
 
 def test_tiny_sold_losses():
     _assert_matches("tiny_sold_losses", references.tiny_sold_losses())
+
+
+def test_tiny_sold_training():
+    _assert_matches("tiny_sold_training", references.tiny_sold_training())
