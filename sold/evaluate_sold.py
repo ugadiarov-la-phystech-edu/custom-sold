@@ -21,8 +21,8 @@ def play_episode(sold: SOLDModule, mode: str = "eval") -> Dict[str, Any]:
     episode["obs"].append(obs)
     episode["high_res"].append(transforms.ToTensor()(sold.env.render(size=(1024, 1024)).copy()))
     while not done:
-        last_action = sold.select_action(obs.to(sold.device), is_first=len(episode["obs"]) == 1, mode=mode).cpu()
-        obs, reward, done, info = sold.env.step(last_action)
+        sold.last_action[:] = sold.select_action(obs.to(sold.device), is_first=len(episode["obs"]) == 1, mode=mode)
+        obs, reward, done, info = sold.env.step(sold.last_action.cpu())
         episode["obs"].append(obs.cpu())
         episode["high_res"].append(transforms.ToTensor()(sold.env.render(size=(1024, 1024)).copy()))
         episode["reward"].append(reward)
@@ -44,7 +44,7 @@ def get_checkpoint_files(checkpoint_path: str) -> List[str]:
         raise ValueError(f"The path '{checkpoint_path}' is neither a valid file nor directory.")
 
 
-@hydra.main(config_path="../configs", config_name="evaluate_sold")
+@hydra.main(config_path="../configs", config_name="evaluate_sold", version_base=None)
 def evaluate(cfg: DictConfig):
     set_seed(cfg.seed)
     output_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir

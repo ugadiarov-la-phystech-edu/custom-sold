@@ -101,6 +101,14 @@ def test_slot_aggregation_transformer_output_and_start():
     assert torch.allclose(model(slots, start=4)[:, 0], model(slots)[:, -1], atol=1e-5)
 
 
+def test_slot_aggregation_transformer_builds_the_mask_once_per_forward():
+    model = _transformer()
+    calls = []
+    model.attention_mask.register_forward_hook(lambda *args: calls.append(1))
+    model(torch.randn(1, 3, 2, 4))
+    assert len(model.transformer_encoder_blocks) == 2 and len(calls) == 1
+
+
 def test_slot_aggregation_transformer_is_causal():
     model = _transformer()
     slots = torch.randn(1, 5, 2, 4)
@@ -160,8 +168,39 @@ def test_gaussian_predictor_bounds_and_std():
     assert dist.rsample().shape == (2, 3, 2)
 
 
+def test_gaussian_predictor_bounds_are_device_buffers_outside_the_checkpoint():
+    model = GaussianPredictor(**PREDICTOR_ARGS, output_dim=2, lower_bound=[-1.0, -1.0], upper_bound=[1.0, 1.0])
+    assert dict(model.named_buffers())["lower_bound"].dtype == torch.float32
+    assert "lower_bound" not in model.state_dict() and "upper_bound" not in model.state_dict()
+    model.to(torch.float64)
+    assert model.lower_bound.dtype == torch.float64  # Moves and casts with the module.
+
+
 def test_two_hot_predictor():
     dist = TwoHotPredictor(**PREDICTOR_ARGS)(torch.randn(2, 3, 2, 4), start=2)
     assert isinstance(dist, TwoHotEncodingDistribution)
     assert dist.logits.shape == (2, 1, 255)
     assert dist.mean.shape == (2, 1, 1)
+
+
+@pytest.mark.xfail(strict=True, reason="BUGS_AND_PITFALLS.md #28: the actor's mean can never exceed about 0.76")
+def test_gaussian_predictor_mean_reaches_the_action_bounds():
+    model = GaussianPredictor(**PREDICTOR_ARGS, output_dim=2, lower_bound=[-1.0, -1.0], upper_bound=[1.0, 1.0])
+    with torch.no_grad():
+        model.mlp[-1].bias.fill_(100.0)  # A raw mean far above the upper bound.
+    mean = model(torch.randn(1, 3, 2, 4)).mean
+    assert torch.allclose(mean, torch.ones_like(mean), atol=1e-4), "the mean stops at tanh(1) ~ 0.76"
+
+
+@pytest.mark.xfail(strict=True, reason="BUGS_AND_PITFALLS.md #30: teacher forcing lets the dynamics model see the frame it predicts")
+def test_teacher_forcing_does_not_see_the_frame_it_predicts():
+    model = make_ocvp_seq_dynamics_model(num_slots=2, slot_dim=4, sequence_length=3, action_dim=2, token_dim=8,
+                                         hidden_dim=8, num_layers=1, num_heads=2, input_buffer_size=6,
+                                         teacher_forcing=True).eval()
+    slots, actions = torch.randn(1, 5, 2, 4), torch.randn(1, 4, 2)
+    with torch.no_grad():
+        first = model.predict_slots(slots, actions, steps=3, num_context=2)[:, 0]
+        changed = slots.clone()
+        changed[:, 2] += 10.0  # The frame that the first prediction is supposed to predict.
+        first_changed = model.predict_slots(changed, actions, steps=3, num_context=2)[:, 0]
+    assert torch.allclose(first, first_changed), "the prediction for frame 2 depends on frame 2 itself"

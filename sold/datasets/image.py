@@ -48,6 +48,18 @@ class ImageDataset(Dataset):
         episode_data = np.load(os.path.join(episode_dir, "episode.npz"))
         return [episode_data.get(key, None) for key in ["images", "actions", "rewards"]]
 
+    def _random_start(self, episode_length: int) -> int:
+        # The upper bound is exclusive, so +1 makes the last window (and episodes of exactly sequence_length) usable.
+        return np.random.randint(0, episode_length - self.sequence_length + 1) if self.split == "train" else 0
+
+    @staticmethod
+    def _actions_leading_to_frames(actions: np.ndarray) -> np.ndarray:
+        """Align actions with SOLD's replay buffer: entry t is the action that led to frame t (NaN for frame 0).
+
+        Episode files store actions[t] = action taken after frame t, one fewer than there are frames.
+        """
+        return np.concatenate([np.full_like(actions[:1], np.nan), actions], axis=0)
+
 
 class PNGDataset(ImageDataset):
     def __init__(self, path: str, data_dir: str, split: str, sequence_length: int) -> None:
@@ -61,8 +73,9 @@ class PNGDataset(ImageDataset):
 
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
         _, actions, rewards = self._load_npz_data(index)
+        actions = self._actions_leading_to_frames(actions)
         png_paths = self.episode_png_paths[index]
-        start_index = np.random.randint(0, len(png_paths) - self.sequence_length) if self.split == "train" else 0
+        start_index = self._random_start(len(png_paths))
 
         image_sequence = []
         for image_index in range(start_index, start_index + self.sequence_length):
@@ -80,7 +93,8 @@ class NPZDataset(ImageDataset):
 
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
         images, actions, rewards = self._load_npz_data(index)
-        start_index = np.random.randint(0, len(images) - self.sequence_length) if self.split == "train" else 0
+        actions = self._actions_leading_to_frames(actions)
+        start_index = self._random_start(len(images))
 
         image_sequence = images[start_index:start_index + self.sequence_length]
         image_sequence = (torch.from_numpy(image_sequence) / 255.).permute(0, 3, 1, 2)  # (sequence_length, 3, H, W)

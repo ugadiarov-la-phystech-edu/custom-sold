@@ -109,8 +109,8 @@ class RingBufferDataset(EpisodeDataset):
         info: Optional[EpisodeDatasetInfo] = None,
         save_path: Optional[str] = None,
     ) -> None:
+        self.save_path = save_path  # Needed by _initialize_from_fields, which the parent may call.
         super().__init__(capacity, batch_size, sequence_length, info)
-        self.save_path = save_path
 
         # Indices used to keep track of episodes stored in contiguous memory.
         self.episode_boundaries = deque()
@@ -163,7 +163,7 @@ class RingBufferDataset(EpisodeDataset):
         # Compute maximum offset that can be used for each sequence.
         max_offsets = torch.remainder(
             selected_boundaries[:, 1] - selected_boundaries[:, 0], self.capacity) - self.sequence_length
-        offsets = (max_offsets * torch.rand(self.batch_size)).long()
+        offsets = ((max_offsets + 1) * torch.rand(self.batch_size)).long()  # Uniform over 0..max_offset inclusive.
 
         # Sample start indices for each sequence.
         start_indices = selected_boundaries[:, 0] + offsets

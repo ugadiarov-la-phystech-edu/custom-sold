@@ -54,7 +54,7 @@ class AutoencoderModule(LoggingStepMixin, LightningModule):
 
 
 def load_autoencoder(checkpoint_path: str):
-    autoencoder_module = AutoencoderModule.load_from_checkpoint(checkpoint_path)
+    autoencoder_module = AutoencoderModule.load_from_checkpoint(checkpoint_path, map_location="cpu")
     return autoencoder_module.autoencoder
 
 

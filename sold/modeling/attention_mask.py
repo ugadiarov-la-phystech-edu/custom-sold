@@ -34,7 +34,7 @@ class AttentionMask(ABC, nn.Module):
 
         if self._full_mask.size() != (self.num_heads, self.max_num_tokens, self.max_num_tokens):
             raise ValueError(f"Expected mask of size ({self.num_heads}, {self.max_num_tokens}, {self.max_num_tokens}), "
-                             f"but got {self.mask.size()}.")
+                             f"but got {self._full_mask.size()}.")
 
         return self._full_mask[:, -sequence_length * self.step_size:, -sequence_length * self.step_size:].repeat(
             batch_size, 1, 1)
@@ -45,7 +45,7 @@ class AttentionMask(ABC, nn.Module):
         ax.set_xticks(np.arange(self.max_num_tokens + 1) - 0.5, minor=True)
         ax.set_yticks(np.arange(self.max_num_tokens + 1) - 0.5, minor=True)
         ax.grid(which="minor", color="grey", linestyle='-', linewidth=0.5)
-        plt.title(f"{type(self).__name__} (head={0})")
+        plt.title(f"{type(self).__name__} (head={head})")
         plt.show()
 
 

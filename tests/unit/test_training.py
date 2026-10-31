@@ -46,11 +46,10 @@ def test_print_summary(monkeypatch, capsys):
 
 def test_progress_bar_helpers():
     bar = OnlineProgressBar()
-    module = SimpleNamespace(num_steps=12, num_episodes=-1)
-    bar.on_train_start(None, module)
+    module = SimpleNamespace(num_steps=12, num_episodes=-1, max_steps=99)
+    bar.pl_module = module
     assert bar._get_train_description(0) == "Steps 12, Episodes 0"
     assert bar.on_train_epoch_start(None, module) is None
-    bar._trainer = SimpleNamespace(model=SimpleNamespace(max_steps=99))
     assert bar.total_train_batches == 99
 
 
@@ -116,6 +115,7 @@ def test_on_load_checkpoint_without_replay_buffer(tiny_sold, tmp_path):
 
 def test_on_load_checkpoint_rejects_buffer_without_fields(tiny_sold, tmp_path):
     from datasets.info import EpisodeDatasetInfo
+    tiny_sold._trainer = mock.Mock()
     with mock.patch.object(type(tiny_sold), "logger", new_callable=mock.PropertyMock,
                            return_value=SimpleNamespace(log_dir=str(tmp_path))):
         with pytest.raises(ValueError, match="without fields"):
@@ -236,24 +236,7 @@ def test_save_replay_buffer_replaces_the_previous_copy(tiny_sold, tmp_path):
     assert (tmp_path / "checkpoints" / "replay_buffer-steps=7-episode=2" / "obs.dat").read_bytes() == b"new"
 
 
-def test_on_load_checkpoint_with_existing_replay_buffer(tiny_sold, tmp_path):
-    """Regression guard for resuming with a saved replay buffer.
-
-    Known bug #4: this currently raises AttributeError (load_from_files does not exist). The test accepts that
-    outcome so the regression suite stays green; tests/bugs asserts the fixed behavior.
-    """
-    from datasets.ring_buffer import RingBufferDataset
-    from tests.unit.test_datasets import _add, _episode
-    saved = RingBufferDataset(20, 2, 3, save_path=str(tmp_path / "saved"))
-    _add(saved, _episode(5))
-    checkpoint = {"num_steps": 5, "num_episodes": 1, "replay_buffer_path": tmp_path / "saved",
-                  "replay_buffer_capacity": 20, "replay_buffer_info": saved.info, "replay_buffer_head": saved.head,
-                  "replay_buffer_tail": saved.tail, "replay_buffer_episode_boundaries": saved.episode_boundaries}
-    with mock.patch.object(type(tiny_sold), "logger", new_callable=mock.PropertyMock,
-                           return_value=SimpleNamespace(log_dir=str(tmp_path / "run"))):
-        try:
-            tiny_sold.on_load_checkpoint(checkpoint)
-        except AttributeError as error:
-            assert "load_from_files" in str(error)
-        else:
-            assert tiny_sold.replay_buffer.num_episodes == 1
+def test_on_load_checkpoint_without_trainer_ignores_the_replay_buffer(tiny_sold, tmp_path):
+    (tmp_path / "saved").mkdir()  # Exists, but there is no trainer (and no logger directory) to restore into (#6).
+    tiny_sold.on_load_checkpoint({"num_steps": 5, "num_episodes": 1, "replay_buffer_path": tmp_path / "saved"})
+    assert tiny_sold.num_steps == 5 and not hasattr(tiny_sold, "replay_buffer")

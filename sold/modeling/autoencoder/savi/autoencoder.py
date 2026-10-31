@@ -26,7 +26,7 @@ class SAVi(Autoencoder):
         torch.nn.init.zeros_(self.corrector.gru.bias_hh)
         torch.nn.init.orthogonal_(self.corrector.gru.weight_hh)
         if hasattr(self.corrector, "slots_mu"):
-            limit = math.sqrt(6.0 / (1 + self.corrector.dim_slots))
+            limit = math.sqrt(6.0 / (1 + self.corrector.slot_dim))
             torch.nn.init.uniform_(self.corrector.slots_mu, -limit, limit)
             torch.nn.init.uniform_(self.corrector.slots_sigma, -limit, limit)
 

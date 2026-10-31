@@ -43,8 +43,7 @@ def test_forward_rejects_too_long_sequences():
 def test_forward_rejects_a_mask_of_the_wrong_size():
     mask = CausalMask(2, 1, 1)
     mask._full_mask = torch.zeros(1, 3, 3)
-    # Currently an AttributeError (bug #20); a ValueError once fixed.
-    with pytest.raises((ValueError, AttributeError)):
+    with pytest.raises(ValueError, match="mask of size"):
         mask(batch_size=1, sequence_length=1)
 
 
@@ -85,3 +84,8 @@ def test_show_draws_the_mask(monkeypatch):
     assert len(shown) == 1
     assert "CausalMask" in shown[0].axes[0].get_title()
     plt.close("all")
+
+
+@pytest.mark.xfail(strict=True, reason="BUGS_AND_PITFALLS.md #32: ALiBi slopes differ from the original formula")
+def test_alibi_slopes_match_press_et_al():
+    assert AlibiMask(2, 8, 1).get_slopes(8) == pytest.approx([2 ** -(i + 1) for i in range(8)])

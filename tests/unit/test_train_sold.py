@@ -39,6 +39,25 @@ def test_construction(tiny_sold):
     assert torch.equal(tiny_sold.actor.lower_bound, torch.tensor([-1.0, -1.0]))
 
 
+def test_critic_target_is_not_trained_by_gradients(tiny_sold):
+    assert not any(p.requires_grad for p in tiny_sold.critic_target.parameters())
+    tiny_sold.after_eval = False
+    images, actions, _ = _batch(tiny_sold)
+    slots = tiny_sold.autoencoder(images, actions[:, 1:])["slots"].detach()
+    returns, values_targ, _, log_probs, entropies = tiny_sold.imagine_ahead(slots, actions)
+    assert not values_targ.requires_grad
+    tiny_sold.compute_actor_loss(returns, values_targ, log_probs, entropies)["actor_loss"].backward()
+    assert all(p.grad is None for p in tiny_sold.critic_target.parameters())
+
+
+def test_imagine_ahead_with_batch_size_one(tiny_sold):
+    tiny_sold.after_eval = False
+    images, actions, _ = _batch(tiny_sold, batch_size=1)
+    slots = tiny_sold.autoencoder(images, actions[:, 1:])["slots"].detach()
+    returns, values_targ, _, log_probs, _ = tiny_sold.imagine_ahead(slots, actions)
+    assert returns.shape == values_targ.shape == log_probs.shape == (1, 3)
+
+
 def test_context_range():
     sold = make_tiny_sold(num_context=[1, 3])
     assert (sold.min_num_context, sold.max_num_context, sold.sequence_length) == (1, 3, 6)
@@ -196,3 +215,36 @@ def test_select_action_clamps_with_first_dimension_bounds():
     obs = torch.zeros(3, 16, 16, dtype=torch.uint8)
     for _ in range(5):
         assert sold.select_action(obs, is_first=True, mode="train").abs().max() <= 0.1
+
+
+@pytest.mark.xfail(strict=True, reason="BUGS_AND_PITFALLS.md #26: the entropy bonus ignores per-step discounts")
+def test_entropy_bonus_uses_the_discount_of_its_own_step():
+    sold = make_tiny_sold()
+    sold.after_eval = False
+    images = torch.rand(2, sold.sequence_length, 3, 16, 16)
+    actions = torch.rand(2, sold.sequence_length, 2)
+    slots = sold.autoencoder(images, actions[:, 1:])["slots"].detach()
+    returns, values_targ, _, log_probs, entropies = sold.imagine_ahead(slots, actions)
+    assert entropies.shape == (2, 3, 1)  # As produced by imagination: one entropy per (sample, step).
+    entropies = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]).unsqueeze(-1)
+    losses = sold.compute_actor_loss(returns, values_targ, log_probs, entropies)
+    expected = -sold.actor_entropy_loss_weight * torch.mean(sold.discounts * entropies.squeeze(-1))
+    assert torch.allclose(losses["actor_entropy_loss"], expected), "each entropy is weighted by the mean discount"
+
+
+@pytest.mark.xfail(strict=True, reason="BUGS_AND_PITFALLS.md #29: imagined actions are not limited to the action space")
+def test_imagined_actions_stay_within_the_action_space():
+    sold = make_tiny_sold()
+    sold.after_eval = False
+    with torch.no_grad():
+        sold.actor.mlp[-1].bias[2:].fill_(10.0)  # Maximal standard deviation (1.0), as early in training.
+    images = torch.rand(4, sold.sequence_length, 3, 16, 16)
+    actions = torch.rand(4, sold.sequence_length, 2) * 2 - 1
+    slots = sold.autoencoder(images, actions[:, 1:])["slots"].detach()
+    used = []
+    original = sold.dynamics_predictor.predict_slots
+    sold.dynamics_predictor.predict_slots = lambda slots, actions, **kwargs: (used.append(actions[:, -1].detach()),
+                                                                              original(slots, actions, **kwargs))[1]
+    sold.imagine_ahead(slots, actions)
+    imagined = torch.cat(used)
+    assert imagined.abs().max() <= 1.0, f"dynamics model receives actions up to {imagined.abs().max():.2f}"

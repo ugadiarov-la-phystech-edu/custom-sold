@@ -53,7 +53,13 @@ class OnlineProgressBar(RichProgressBar):
     """Custom progress bar for online RL training loops."""
 
     def on_train_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        # Create the display and the single train task up front: Lightning >= 2.5.3 adds the task itself in
+        # on_train_batch_end if none exists, which fails when the display does not exist yet.
         self.pl_module = pl_module
+        super().on_train_start(trainer, pl_module)
+        if self.progress is not None:
+            self.train_progress_bar_id = self._add_task(self.total_train_batches,
+                                                        self._get_train_description(trainer.current_epoch))
 
     def _get_train_description(self, current_epoch: int) -> str:
         train_description = f"Steps {self.pl_module.num_steps}, Episodes {max(self.pl_module.num_episodes, 0)}"
@@ -63,18 +69,14 @@ class OnlineProgressBar(RichProgressBar):
         return
 
     def _update(self, progress_bar_id: Optional["TaskID"], current: int, visible: bool = True) -> None:
-        if self.is_enabled and self.progress is None:
-            super().on_train_start(self.trainer, self.pl_module)
-            self.train_progress_bar_id = self._add_task(self.total_train_batches,
-                                                        self._get_train_description(self.trainer.current_epoch))
-            progress_bar_id = self.train_progress_bar_id
         if self.progress is not None and self.is_enabled:
-            self.progress.update(progress_bar_id, completed=self.pl_module.num_steps, visible=visible, description=self._get_train_description(self.trainer.current_epoch))
+            self.progress.update(self.train_progress_bar_id, completed=self.pl_module.num_steps, visible=visible,
+                                 description=self._get_train_description(self.trainer.current_epoch))
             self.refresh()
 
     @property
     def total_train_batches(self) -> Union[int, float]:
-        return self.trainer.model.max_steps
+        return self.pl_module.max_steps
 
 
 class OnlineModule(LoggingStepMixin, LightningModule, ABC):
@@ -241,9 +243,10 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
             replay_buffer_dir = self.checkpoints_dir / f"replay_buffer-steps={self.num_steps}-episode={self.num_episodes}"
             if Path(self.replay_buffer.save_path).resolve().exists():
                 shutil.copytree(Path(self.replay_buffer.save_path).resolve(), replay_buffer_dir)
-            old_replay_buffer_dirs = sorted(list(self.checkpoints_dir.glob("replay_buffer-steps=*")))[:-1]
-            for old_replay_buffer_dir in old_replay_buffer_dirs:
-                shutil.rmtree(old_replay_buffer_dir)
+            # Keep only the copy for this checkpoint (sorting the names as text would misorder 9000 and 10500).
+            for old_replay_buffer_dir in self.checkpoints_dir.glob("replay_buffer-steps=*"):
+                if old_replay_buffer_dir != replay_buffer_dir:
+                    shutil.rmtree(old_replay_buffer_dir)
 
             checkpoint["replay_buffer_path"] = replay_buffer_dir
             checkpoint["replay_buffer_capacity"] = self.replay_buffer.capacity
@@ -256,12 +259,15 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
         self.num_steps = checkpoint["num_steps"]
         self.num_episodes = checkpoint["num_episodes"] - 1  # Will be incremented instantly since self.done is True.
 
+        # The replay buffer is only needed to resume training. Without a trainer (e.g. load_from_checkpoint in
+        # evaluate_sold.py) there is no logger directory to restore it into.
         replay_buffer_path = Path(checkpoint["replay_buffer_path"]) if "replay_buffer_path" in checkpoint else None
-        if replay_buffer_path is not None and replay_buffer_path.exists():
+        if replay_buffer_path is not None and replay_buffer_path.exists() and self._trainer is not None:
             self.train_dataloader()  # Initializes the replay buffer.
             if checkpoint["replay_buffer_info"].fields is None:
                 raise ValueError("Cannot load replay buffer without fields.")
-            self.replay_buffer.load_from_files(checkpoint["replay_buffer_path"], checkpoint["replay_buffer_capacity"],
-                                               checkpoint["replay_buffer_info"], checkpoint["replay_buffer_head"],
-                                               checkpoint["replay_buffer_tail"],
-                                               checkpoint["replay_buffer_episode_boundaries"])
+            self.replay_buffer.load_from_disk_storage(checkpoint["replay_buffer_path"],
+                                                      checkpoint["replay_buffer_capacity"],
+                                                      checkpoint["replay_buffer_info"], checkpoint["replay_buffer_head"],
+                                                      checkpoint["replay_buffer_tail"],
+                                                      checkpoint["replay_buffer_episode_boundaries"])

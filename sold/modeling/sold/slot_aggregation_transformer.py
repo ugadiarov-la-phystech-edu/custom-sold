@@ -43,8 +43,9 @@ class SlotAggregationTransformer(nn.Module):
         time_encoded_tokens = self.positional_encoding(tokens)
 
         output_tokens = time_encoded_tokens.reshape(batch_size, -1, self.token_dim)
+        attention_mask = self.attention_mask(batch_size, sequence_length)
         for transformer_encoder_block in self.transformer_encoder_blocks:
-            output_tokens = transformer_encoder_block(output_tokens, self.attention_mask(batch_size, sequence_length))
+            output_tokens = transformer_encoder_block(output_tokens, attention_mask)
 
         output_tokens = output_tokens.reshape(batch_size, sequence_length, -1, self.token_dim)[:, -(sequence_length-start):, -1]
         return output_tokens

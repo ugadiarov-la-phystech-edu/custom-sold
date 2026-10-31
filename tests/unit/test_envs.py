@@ -46,10 +46,9 @@ def test_time_limit_truncates_and_resets():
 def test_pixels_resizes_rendered_frames():
     env = Pixels(fakes.FakePixelEnv(), image_size=(8, 6))
     obs = env.reset()
-    # PIL's resize takes (width, height), so non-square sizes come out transposed (#24).
-    assert obs.shape == (3, 6, 8) and obs.dtype == np.uint8
+    assert obs.shape == (3, 8, 6) and obs.dtype == np.uint8  # (3, height, width), also when not square (#24).
     obs, reward, done, info = env.step(np.ones(2))
-    assert obs.shape == (3, 6, 8) and "success" in info
+    assert obs.shape == (3, 8, 6) and "success" in info
     assert env.observation_space.shape == (3, 8, 6)
     square = Pixels(fakes.FakePixelEnv(), image_size=(8, 8))
     assert square.reset().shape == square.observation_space.shape
@@ -112,12 +111,30 @@ def test_make_env_mof_suite(monkeypatch):
     monkeypatch.setattr(from_mof, "make_gym_env", fake_make_gym_env)
     env = envs.make_env("mof", "PushRed_1to3Distractors_Dense-v1", (8, 8), 50, 2, seed=5)
     assert isinstance(env, ToTensor) and isinstance(env.env, from_mof.VariableDistractorsWrapper)
-    assert created[0][1:] == ((8, 8), 50, 2, 5)
+    assert created[0][1:4] == ((8, 8), 50, 2)
     for _ in range(30):
         assert env.reset().shape == (3, 8, 8)
-    names = {name for name, *_ in created}
-    assert names == {f"PushRed_{n}Distractors_Dense-v1" for n in (1, 2, 3)}
-    assert len(created) == 31  # One new environment per reset (#12).
+    names = [name for name, *_ in created]
+    # One environment per number of distractors, created on first use and then reused (#12).
+    assert sorted(names) == [f"PushRed_{n}Distractors_Dense-v1" for n in (1, 2, 3)]
+    assert sorted(seed for *_, seed in created) == [6, 7, 8]  # seed + number of distractors (#11).
+    wrapper = env.env
+    env.close()
+    assert all(inner.unwrapped.closed for inner in wrapper.envs.values())
+
+
+def test_make_env_mof_suite_without_seed(monkeypatch):
+    import envs.from_mof as from_mof
+    seeds = []
+    monkeypatch.setattr(from_mof, "make_gym_env", lambda name, size, steps, repeat, seed: (
+        seeds.append(seed), Pixels(fakes.FakePixelEnv(), size))[1])
+    envs.make_env("mof", "PushRed_2to2Distractors_Dense-v1", (8, 8), 50, 2)
+    assert seeds == [None]
+
+
+def test_make_env_gym_suite_seeds_the_environment_only_when_asked():
+    assert envs.make_env("gym", "FakePixel-v0", (8, 8), 5, 1, seed=11).unwrapped.seed_value == 11
+    assert envs.make_env("gym", "FakePixel-v0", (8, 8), 5, 1).unwrapped.seed_value is None
 
 
 def test_make_env_survival_suite_with_fake_module(monkeypatch):

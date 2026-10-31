@@ -72,13 +72,14 @@ class GaussianPredictor(Predictor):
         super().__init__(max_episode_steps, num_slots, slot_dim, token_dim, num_heads, num_layers, hidden_dim,
                          output_dim=2*output_dim, num_register_tokens=num_register_tokens, num_mlp_layers=num_mlp_layers)
         self.max_std, self.min_std, self.init_std = 1.0, 0.1, 2.0
-        self.lower_bound = torch.tensor(lower_bound)
-        self.upper_bound = torch.tensor(upper_bound)
+        # Non-persistent buffers follow the module's device without changing the checkpoint keys.
+        self.register_buffer("lower_bound", torch.as_tensor(lower_bound, dtype=torch.float32), persistent=False)
+        self.register_buffer("upper_bound", torch.as_tensor(upper_bound, dtype=torch.float32), persistent=False)
 
     def forward(self, slots: torch.Tensor, start: int = 0) -> D.Distribution:
         x = super().forward(slots, start=start)
         mean_, std_ = x.chunk(2, -1)
-        mean_ = torch.clamp(mean_, self.lower_bound.to(mean_.device), self.upper_bound.to(mean_.device))
+        mean_ = torch.clamp(mean_, self.lower_bound, self.upper_bound)
         std = (self.max_std - self.min_std) * torch.sigmoid(std_ + self.init_std) + self.min_std
         dist = D.Normal(torch.tanh(mean_), std, validate_args=False)
         return D.Independent(dist, 1, validate_args=False)

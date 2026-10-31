@@ -1,5 +1,6 @@
 defaults:
   - hydra: default
+  - _self_
 
 checkpoint_path: "CHECKPOINT_PATH(S)"  # Can be one checkpoint or a directory of checkpoints.
 experiment: "my_experiment"
@@ -13,3 +14,4 @@ env:
   image_size: [ 64, 64 ]
   max_episode_steps: 50
   action_repeat: 2
+  seed: ${seed}

@@ -2,7 +2,6 @@ _target_: modeling.autoencoder.cnn.autoencoder.Cnn
 
 encoder:
   _target_: modeling.autoencoder.cnn.encoder.CnnEncoder
-  image_size: '???'  # Image-size gets queried from the dataset.
   num_channels: [ 32, 64, 128, 256 ]
   kernel_sizes: [ 4, 4, 4, 4 ]
   strides: [ 1, 2, 2, 2 ]

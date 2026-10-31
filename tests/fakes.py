@@ -61,10 +61,10 @@ if "FakePixel-v0" not in gym.envs.registry.env_specs:
     gym.register(id="FakePixel-v0", entry_point="tests.fakes:FakePixelEnv")
 
 
-def make_fake_env(image_size=(16, 16), max_episode_steps: int = 8, action_repeat: int = 1, **env_kwargs):
+def make_fake_env(image_size=(16, 16), max_episode_steps: int = 8, action_repeat: int = 1, seed=None, **env_kwargs):
     """The real SOLD wrapper stack (suite 'gym') around FakePixelEnv."""
     from envs import make_env
-    env = make_env("gym", "FakePixel-v0", tuple(image_size), max_episode_steps, action_repeat)
+    env = make_env("gym", "FakePixel-v0", tuple(image_size), max_episode_steps, action_repeat, seed)
     for key, value in env_kwargs.items():
         setattr(env.unwrapped, key, value)
     return env

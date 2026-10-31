@@ -3,11 +3,11 @@ os.environ['MUJOCO_GL'] = 'egl'  # Set MuJoCo rendering backend.
 from envs.from_gym import make_env as make_gym_env
 from envs.wrappers.to_tensor import ToTensor
 import gym
-from typing import Tuple
+from typing import Optional, Tuple
 
 
 def make_env(suite: str, name: str, image_size: Tuple[int, int], max_episode_steps: int, action_repeat: int,
-             seed: int = 0) -> gym.Env:
+             seed: Optional[int] = None) -> gym.Env:
     if suite == 'gym':
         env = make_gym_env(name, image_size, max_episode_steps, action_repeat, seed)
     elif suite == 'mof':
@@ -17,7 +17,11 @@ def make_env(suite: str, name: str, image_size: Tuple[int, int], max_episode_ste
         from envs.from_dmcontrol import make_env as make_dmcontrol_env
         env = make_dmcontrol_env(name, image_size, max_episode_steps, action_repeat, seed)
     elif suite == 'survival':
-        from envs.from_survival import make_env as make_survival_env
+        try:
+            from envs.from_survival import make_env as make_survival_env
+        except ModuleNotFoundError as error:
+            raise ValueError("The 'survival' suite needs envs/from_survival.py, which is not part of this "
+                             "repository.") from error
         from envs.wrappers.to_tensordict import ToTensorDict
         env = make_survival_env(name, image_size, max_episode_steps, action_repeat, seed)
         env = ToTensorDict(env)

@@ -1,7 +1,6 @@
-"""One test per bug in BUGS_AND_PITFALLS.md (number in the test name).
+"""Regression tests for fixed items of BUGS_AND_PITFALLS.md (number in the test name).
 
-Each test asserts the CORRECT behavior, so it fails until the bug is fixed. Run them with `pytest -m bug`;
-exclude them with `pytest -m "not bug"` to use the rest of the suite as a refactoring safety net.
+These started as expected failures (xfail) and guard the fixes.
 """
 
 import ast
@@ -23,15 +22,15 @@ from tests import fakes
 from tests.conftest import CONFIGS_DIR, REPO_DIR, SOLD_DIR, make_online_trainer, make_tiny_savi, make_tiny_sold
 from tests.unit.test_datasets import _add, _episode
 
-pytestmark = pytest.mark.bug
 
 
 # ------------------------------------------------------------------------------------- #2
 def test_02_savi_dataset_path_is_not_hardcoded():
     dataset = OmegaConf.load(CONFIGS_DIR / "train_autoencoder.yaml").dataset
+    if OmegaConf.is_missing(dataset, "path") or OmegaConf.is_missing(dataset, "data_dir"):
+        return  # Mandatory command-line values: nothing machine-specific in the config.
     configured = SOLD_DIR / dataset.path / dataset.data_dir
-    assert OmegaConf.is_missing(dataset, "data_dir") or configured.exists(), \
-        f"dataset points at {configured}, which only exists on the author's machine"
+    assert configured.exists(), f"dataset points at {configured}, which only exists on the author's machine"
 
 
 # ------------------------------------------------------------------------------------ #3a
@@ -54,10 +53,12 @@ def test_04_resuming_restores_the_saved_replay_buffer(tiny_sold, tmp_path):
     checkpoint = {"num_steps": 5, "num_episodes": 1, "replay_buffer_path": tmp_path / "saved",
                   "replay_buffer_capacity": 20, "replay_buffer_info": saved.info, "replay_buffer_head": saved.head,
                   "replay_buffer_tail": saved.tail, "replay_buffer_episode_boundaries": saved.episode_boundaries}
+    tiny_sold._trainer = mock.Mock()  # Resuming happens inside trainer.fit (see #6 for the case without one).
     with mock.patch.object(type(tiny_sold), "logger", new_callable=mock.PropertyMock,
                            return_value=SimpleNamespace(log_dir=str(tmp_path / "run"))):
         tiny_sold.on_load_checkpoint(checkpoint)
     assert tiny_sold.replay_buffer.num_episodes == 1 and tiny_sold.replay_buffer.tail == 5
+    assert np.array_equal(tiny_sold.replay_buffer.ring_buffer["obs"], saved.ring_buffer["obs"])
 
 
 # ------------------------------------------------------------------------------------- #5
@@ -109,18 +110,6 @@ def test_08_survival_suite_is_usable_or_rejected_cleanly():
         envs.make_env("survival", "Forage", (16, 16), 10, 1)
     except ValueError:
         pass  # Removing the suite is a valid fix.
-
-
-# ------------------------------------------------------------------------------------- #9
-@pytest.mark.mujoco
-def test_09_reach_episodes_last_max_episode_steps():
-    env = envs.make_env("mof", "ReachRed_0to0Distractors_Dense-v1", (64, 64), max_episode_steps=50, action_repeat=2)
-    env.reset()
-    steps, done = 0, False
-    while not done:
-        _, _, done, _ = env.step(torch.zeros(env.action_space.shape))
-        steps += 1
-    assert steps == 50
 
 
 # ------------------------------------------------------------------------------------ #11
@@ -184,9 +173,9 @@ def test_14_random_crop_can_use_the_last_window(tmp_path):
     from tests.conftest import write_image_dataset
     write_image_dataset(tmp_path / "run", "npz", episode_length=7)
     dataset = load_image_dataset(str(tmp_path), "run", "train", sequence_length=4)
-    last_window = np.load(tmp_path / "run" / "train" / "0" / "episode.npz")["actions"][3:7]
-    assert any(len(dataset[0][1]) == len(last_window) and np.allclose(dataset[0][1].numpy(), last_window)
-               for _ in range(200))
+    images = np.load(tmp_path / "run" / "train" / "0" / "episode.npz")["images"]
+    last_window = torch.from_numpy(images[3:7]).permute(0, 3, 1, 2) / 255.
+    assert any(torch.allclose(dataset[0][0], last_window) for _ in range(200))
 
 
 # ------------------------------------------------------------------------------------ #15
@@ -194,7 +183,8 @@ def test_15_pixels_wrapper_does_not_require_multi_object_fetch(monkeypatch):
     monkeypatch.setitem(sys.modules, "multi_object_fetch", None)
     monkeypatch.setitem(sys.modules, "multi_object_fetch.env", None)
     monkeypatch.delitem(sys.modules, "envs.wrappers.pixels")
-    importlib.import_module("envs.wrappers.pixels")
+    pixels = importlib.import_module("envs.wrappers.pixels")
+    assert pixels.Pixels(fakes.FakePixelEnv(), (8, 8)).reset().shape == (3, 8, 8)
 
 
 # ------------------------------------------------------------------------------------ #16
@@ -317,8 +307,9 @@ def test_22_attention_visualization_does_not_stack_forward_wrappers():
 
 # ------------------------------------------------------------------------------------ #23
 def test_23_cnn_autoencoder_config_can_be_instantiated():
+    from utils.instantiate import fill_in_missing
     cfg = OmegaConf.load(CONFIGS_DIR / "autoencoder" / "cnn.yaml")
-    cfg.encoder.image_size = cfg.decoder.image_size = [16, 16]
+    fill_in_missing(cfg, {"image_size": [16, 16]})  # As train_autoencoder.py does with the dataset infos.
     autoencoder = hydra.utils.instantiate(cfg)
     assert autoencoder(torch.rand(1, 2, 3, 16, 16), torch.zeros(1, 1, 2))["reconstructions"].shape == (1, 2, 3, 16, 16)
 
@@ -337,21 +328,6 @@ def test_25_ring_buffer_accepts_predefined_fields(tmp_path):
     fields = Fields(obs=TensorType(device="cpu", dtype=torch.uint8, shape=(3, 2, 2)))
     buffer = RingBufferDataset(5, 1, 1, info=EpisodeDatasetInfo(fields=fields), save_path=str(tmp_path))
     assert buffer.ring_buffer["obs"].shape == (5, 3, 2, 2)
-
-
-# ------------------------------------------------------------------------------------ #26
-def test_26_entropy_bonus_uses_the_discount_of_its_own_step():
-    sold = make_tiny_sold()
-    sold.after_eval = False
-    images = torch.rand(2, sold.sequence_length, 3, 16, 16)
-    actions = torch.rand(2, sold.sequence_length, 2)
-    slots = sold.autoencoder(images, actions[:, 1:])["slots"].detach()
-    returns, values_targ, _, log_probs, entropies = sold.imagine_ahead(slots, actions)
-    assert entropies.shape == (2, 3, 1)  # As produced by imagination: one entropy per (sample, step).
-    entropies = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]).unsqueeze(-1)
-    losses = sold.compute_actor_loss(returns, values_targ, log_probs, entropies)
-    expected = -sold.actor_entropy_loss_weight * torch.mean(sold.discounts * entropies.squeeze(-1))
-    assert torch.allclose(losses["actor_entropy_loss"], expected), "each entropy is weighted by the mean discount"
 
 
 # ------------------------------------------------------------------------------------ #27

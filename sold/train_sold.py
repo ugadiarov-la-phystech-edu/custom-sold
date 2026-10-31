@@ -48,6 +48,7 @@ class SOLDModule(OnlineModule):
         self.actor = actor(**regression_infos, output_dim=env.action_space.shape[0], lower_bound=env.action_space.low, upper_bound=env.action_space.high)
         self.critic = critic(**regression_infos)
         self.critic_target = copy.deepcopy(self.critic)
+        self.critic_target.requires_grad_(False)  # Updated only by EMA, never by gradients.
         self.reward_predictor = reward_predictor(**regression_infos)
         self.dynamics_predictor = dynamics_predictor(
                 num_slots=autoencoder.num_slots, slot_dim=autoencoder.slot_dim, sequence_length=imagination_horizon,
@@ -66,7 +67,7 @@ class SOLDModule(OnlineModule):
 
         self.finetune_autoencoder = finetune_autoencoder
         self.autoencoder_grad_clip = autoencoder_grad_clip
-        self.autoencoder_optimizer = torch.optim.Adam(self.autoencoder.parameters(), lr=autoencoder_learning_rate)
+        self.autoencoder_learning_rate = autoencoder_learning_rate
         self.imagination_horizon = imagination_horizon
         self.start_imagination_from_every = start_imagination_from_every
         self.return_lambda = return_lambda
@@ -80,23 +81,29 @@ class SOLDModule(OnlineModule):
         self.current_losses = defaultdict(list)
 
     def configure_optimizers(self) -> OptimizerLRScheduler:
-        return [torch.optim.Adam(self.dynamics_predictor.parameters(), lr=self.dynamics_learning_rate),
-                torch.optim.Adam(self.reward_predictor.parameters(), lr=self.reward_learning_rate),
-                torch.optim.Adam(self.actor.parameters(), lr=self.actor_learning_rate),
-                torch.optim.Adam(self.critic.parameters(), lr=self.critic_learning_rate)]
+        optimizers = [torch.optim.Adam(self.dynamics_predictor.parameters(), lr=self.dynamics_learning_rate),
+                      torch.optim.Adam(self.reward_predictor.parameters(), lr=self.reward_learning_rate),
+                      torch.optim.Adam(self.actor.parameters(), lr=self.actor_learning_rate),
+                      torch.optim.Adam(self.critic.parameters(), lr=self.critic_learning_rate)]
+        if self.finetune_autoencoder:  # Returned here so that its state is saved in checkpoints.
+            optimizers.append(torch.optim.Adam(self.autoencoder.parameters(), lr=self.autoencoder_learning_rate))
+        return optimizers
 
     def training_step(self, batch, batch_index: int) -> STEP_OUTPUT:
-        dynamics_optimizer, reward_optimizer, actor_optimizer, critic_optimizer = self.optimizers()
+        dynamics_optimizer, reward_optimizer, actor_optimizer, critic_optimizer, *autoencoder_optimizer = self.optimizers()
         images, actions, rewards = batch["obs"].squeeze(0) / 255., batch["action"].squeeze(0), batch["reward"].squeeze(0)
 
         if self.finetune_autoencoder:
-            self.autoencoder_optimizer.zero_grad()
-        outputs = AutoencoderModule.compute_reconstruction_loss(self, images, actions)
+            autoencoder_optimizer = autoencoder_optimizer[0]
+            autoencoder_optimizer.zero_grad()
+        # Without fine-tuning, the autoencoder forward pass needs no autograd graph.
+        with torch.set_grad_enabled(self.finetune_autoencoder):
+            outputs = AutoencoderModule.compute_reconstruction_loss(self, images, actions)
         if self.finetune_autoencoder:
-            outputs["reconstruction_loss"].backward()
-            self.clip_gradients(self.autoencoder_optimizer, gradient_clip_val=self.autoencoder_grad_clip,
+            self.manual_backward(outputs["reconstruction_loss"])
+            self.clip_gradients(autoencoder_optimizer, gradient_clip_val=self.autoencoder_grad_clip,
                                 gradient_clip_algorithm="norm")
-            self.autoencoder_optimizer.step()
+            autoencoder_optimizer.step()
 
         if self.after_eval:
             self.log("autoencoder_reconstruction", self.autoencoder.visualize_reconstruction(
@@ -229,8 +236,8 @@ class SOLDModule(OnlineModule):
                 slots_context = torch.cat([slots_context, predicted_slots], dim=1)
 
         with FreezeParameters([self.reward_predictor, self.critic]):
-            predicted_rewards = self.reward_predictor(slots_context, start=num_context).mean.squeeze()
-            predicted_values = self.critic(slots_context, start=num_context).mean.squeeze()
+            predicted_rewards = self.reward_predictor(slots_context, start=num_context).mean.squeeze(-1)
+            predicted_values = self.critic(slots_context, start=num_context).mean.squeeze(-1)
 
         lambda_returns = self.compute_lambda_returns(predicted_rewards, predicted_values)
 
@@ -240,7 +247,7 @@ class SOLDModule(OnlineModule):
         # Value update
         slots_context = slots_context.detach()
         # Predict imagined values
-        predicted_values_targ = self.critic_target(slots_context[:, :-1], start=num_context - 1).mean.squeeze()
+        predicted_values_targ = self.critic_target(slots_context[:, :-1], start=num_context - 1).mean.squeeze(-1)
         predicted_values_dist = self.critic(slots_context[:, :-1], start=num_context - 1)
 
         if self.after_eval:
@@ -323,7 +330,9 @@ class SOLDModule(OnlineModule):
             else:
                 raise ValueError(f"Invalid mode: {mode}")
 
-        return selected_action.clamp_(self.env.action_space.low[0], self.env.action_space.high[0]).detach()
+        # Clamp every dimension to its own bounds (the actor keeps them as buffers on the module's device).
+        selected_action = selected_action.to(self.actor.lower_bound.device)
+        return torch.clamp(selected_action, self.actor.lower_bound, self.actor.upper_bound).detach()
 
 
 @hydra.main(config_path="../configs", config_name="train_sold", version_base=None)

@@ -9,15 +9,6 @@ from torchvision.transforms.functional import rgb_to_grayscale
 from typing import List, Optional, Union
 
 
-import colorsys
-import math
-from PIL import ImageDraw
-import torch
-import torchvision
-from torchvision.transforms.functional import rgb_to_grayscale
-from typing import List, Optional, Union
-
-
 def slot_color(slot_index: int, num_slots: int, saturation: float = 1.0, lightness: float = 0.5) -> torch.Tensor:
     num_slots = max(num_slots, 2)
     hue = (slot_index / (num_slots - 1)) * (1 - (1 / num_slots))
@@ -178,19 +169,23 @@ def get_attention_weights(model: nn.Module, slots: torch.Tensor) -> torch.Tensor
     batch_size, sequence_length, num_slots, slot_dim = slots.size()
     attention_weights_hook = AttentionWeightsHook()
 
-    hook_handles = []
+    hook_handles, patched_modules = [], []
     for module in model.modules():
         if isinstance(module, nn.MultiheadAttention):
             enable_attention_weights(module)
+            patched_modules.append(module)
             hook_handles.append(module.register_forward_hook(attention_weights_hook))
 
-    model(slots.detach(), start=slots.shape[1] - 1)
-    output_weights = attention_weights_hook.compute_attention_weights(slots.device, num_slots, sequence_length)
+    try:
+        model(slots.detach(), start=slots.shape[1] - 1)
+    finally:
+        # Undo the patch: wrappers left in place would nest one level deeper on every call (RecursionError).
+        for module in patched_modules:
+            del module.forward
+        for hook_handle in hook_handles:
+            hook_handle.remove()
 
-    for hook_handle in hook_handles:
-        hook_handle.remove()
-
-    return output_weights
+    return attention_weights_hook.compute_attention_weights(slots.device, num_slots, sequence_length)
 
 
 def get_output_attention_images(attention_weights, rgbs, masks):

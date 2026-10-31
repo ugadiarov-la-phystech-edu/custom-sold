@@ -7,7 +7,6 @@ pythonpath = ["sold", "."]
 addopts = "-ra --strict-markers"
 timeout = 600
 markers = [
-    "bug: asserts the correct behavior for an item in BUGS_AND_PITFALLS.md; fails until that bug is fixed",
     "mujoco: needs a working mujoco-py and multi_object_fetch with rendering",
     "slow: runs a complete (tiny) training or evaluation script",
 ]
@@ -31,7 +30,7 @@ filterwarnings = [
 ]
 
 # 100% line coverage is enforced. Branch coverage would count towards the same total, so it is off here;
-# see it with: pytest -m "not bug" --cov --cov-branch --cov-fail-under=0
+# see it with: pytest --cov --cov-branch --cov-fail-under=0
 [tool.coverage.run]
 source = ["sold"]
 

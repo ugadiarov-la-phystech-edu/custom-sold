@@ -32,3 +32,14 @@ def test_episode_lengths_per_task():
             steps += 1
         lengths[task] = steps
     assert lengths == {"ReachRed": 25, "PushRed": 50}
+
+
+@pytest.mark.xfail(strict=True, reason="BUGS_AND_PITFALLS.md #9: Reach episodes end after 25 steps (gym's own time limit)")
+def test_reach_episodes_last_max_episode_steps():
+    env = envs.make_env("mof", "ReachRed_0to0Distractors_Dense-v1", (64, 64), max_episode_steps=50, action_repeat=2)
+    env.reset()
+    steps, done = 0, False
+    while not done:
+        _, _, done, _ = env.step(torch.zeros(env.action_space.shape))
+        steps += 1
+    assert steps == 50

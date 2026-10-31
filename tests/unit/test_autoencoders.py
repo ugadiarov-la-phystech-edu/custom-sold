@@ -308,3 +308,9 @@ def test_log_reconstruction_logs_first_sample_only_when_due():
     module = _pl_module("x", is_last_batch=False)
     callback.on_train_batch_end(None, module, outputs, None, 0)
     module.log.assert_not_called()
+
+
+@pytest.mark.xfail(strict=True, reason="BUGS_AND_PITFALLS.md #31: Slot Attention scales by the wrong dimension")
+def test_slot_attention_scales_by_the_query_key_dimension():
+    corrector = Corrector(num_slots=7, slot_dim=128, feature_dim=64, num_iterations=1, num_initial_iterations=3)
+    assert corrector.scale == pytest.approx(128 ** -0.5)  # q and k have slot_dim channels (paper Eq. 1).

@@ -134,7 +134,7 @@ def test_ring_buffer_sample_returns_contiguous_sequences(buffer):
         assert batch["obs"].dtype == torch.uint8
         first = batch["obs"][:, :, 0, 0, 0].long()
         assert torch.all(first[:, 1:] - first[:, :-1] == 1)
-        assert set(first[:, 0].tolist()) <= {10, 20}  # The last window (start 11 / 21) is never sampled (#19).
+        assert set(first[:, 0].tolist()) <= {10, 11, 20, 21}  # Any window that fits, including the last (#19).
 
 
 def test_ring_buffer_sequence_length_none_samples_all_episodes(tmp_path):
@@ -222,7 +222,9 @@ def test_image_dataset_items(tmp_path, save_format):
     images, actions = val[1]
     assert images.shape == (4, 3, 16, 16) and images.dtype == torch.float32
     assert 0.0 <= images.min() and images.max() <= 1.0
-    assert torch.allclose(actions, torch.from_numpy(expected["actions"][:4]))
+    # Aligned like SOLD's replay buffer: entry t is the action that led to frame t, NaN for frame 0 (#13).
+    assert torch.isnan(actions[0]).all()
+    assert torch.allclose(actions[1:], torch.from_numpy(expected["actions"][:3]))
     if save_format == "npz":
         assert torch.allclose(images, torch.from_numpy(expected["images"][:4]).permute(0, 3, 1, 2) / 255.)
 
@@ -232,10 +234,11 @@ def test_image_dataset_items(tmp_path, save_format):
     for seed in range(40):
         np.random.seed(seed)
         _, actions = train[0]
-        matches = [s for s in range(7) if len(train_actions[s:s + 4]) == len(actions)
-                   and np.allclose(train_actions[s:s + 4], actions.numpy())]
-        starts.add(matches[0])
-    assert starts == {0, 1, 2}  # Start 3 (the last window) is never used (#14).
+        assert actions.shape == (4, 2)
+        start = 0 if torch.isnan(actions[0]).all() else \
+            next(s for s in range(1, 4) if np.allclose(train_actions[s - 1:s + 3], actions.numpy()))
+        starts.add(start)
+    assert starts == {0, 1, 2, 3}  # Every window, including the last one (#14).
 
 
 def test_image_dataset_base_class(tmp_path):

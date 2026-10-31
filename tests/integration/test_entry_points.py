@@ -160,7 +160,7 @@ def test_train_sold_resumes_from_checkpoint(monkeypatch, tmp_path, sold_run, sav
 def test_evaluate_sold(monkeypatch, tmp_path, sold_run):
     checkpoint = _checkpoint_without_replay_buffer(sold_run, tmp_path)
     out = tmp_path / "eval"
-    monkeypatch.chdir(tmp_path)  # Legacy Hydra behavior changes into the output folder.
+    monkeypatch.chdir(tmp_path)
     run_entry_point(monkeypatch, evaluate_sold.evaluate,
                     [f"hydra.run.dir={out}", f"checkpoint_path='{checkpoint}'", "eval_episodes=2",
                      "env.max_episode_steps=8", *FAKE_ENV])

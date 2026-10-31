@@ -86,3 +86,12 @@ def test_moments_state_is_saved_in_state_dict():
     moments(torch.arange(100.0))
     state = moments.state_dict()
     assert set(state) == {"low", "high"}
+
+
+@pytest.mark.xfail(strict=True, reason="BUGS_AND_PITFALLS.md #33: the two-hot mean is not the expectation of Eq. 5")
+def test_two_hot_mean_is_the_expectation_over_symexp_bins():
+    logits = torch.full((1, 255), -1e9)
+    logits[0, 127] = logits[0, 133] = 0.0  # Half the mass on 0, half on bin 133 (symlog value about 0.94).
+    dist = TwoHotEncodingDistribution(logits, dims=1)
+    expected = (dist.probs * symexp(dist.bins)).sum(-1, keepdim=True)  # Paper Eq. 5.
+    assert torch.allclose(dist.mean, expected, atol=1e-5)

@@ -88,6 +88,10 @@ class ExtendedTensorBoardLogger(TensorBoardLogger):
         self.current_step = step
         self.accumulated_metrics.update(metrics)
 
+    def finalize(self, status: str) -> None:
+        super().finalize(status)
+        self._flush_metrics()  # Otherwise the metrics of the last step never reach metrics.jsonl.
+
     def _flush_metrics(self) -> None:
         if self.accumulated_metrics:
             record = {"step": self.current_step, **self.accumulated_metrics}

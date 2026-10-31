@@ -53,6 +53,7 @@ model:
     image_size: [ 64, 64 ]
     max_episode_steps: 50
     action_repeat: 2
+    seed: ${seed}  # Makes the environment reproducible (generate_dataset.yaml stays unseeded on purpose).
 
   autoencoder:
     _target_: train_autoencoder.load_autoencoder
