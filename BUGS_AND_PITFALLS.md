@@ -9,10 +9,10 @@ Severity levels:
 - **Bug**: wrong behavior or a crash in a code path that is normally used.
 - **Pitfall**: correct code, but surprising behavior or a trap for future changes.
 - **Paper deviation**: the code differs from the SOLD paper (see `PAPER_NOTES.md`); fixing it changes how existing checkpoints behave.
-- **(fixed)**: fixed in the working tree, not yet committed. Its regression test is in `tests/unit/test_fixed_bugs.py` (named `test_<number>_...`).
+- **(fixed)**: fixed in the working tree, not yet committed. Its regression test sits next to the related unit tests under a `# BUGS_AND_PITFALLS.md #<number> (fixed).` comment.
 
 Each open code issue has a test next to the related unit tests that asserts the correct behavior. It is marked `@pytest.mark.xfail(strict=True)` with the item number in its reason, so `pytest` reports it as `xfailed`; list them with `pytest -rx`, and see `tests/README.md`.
-A fix turns it into a strict `XPASS` failure, which is the cue to remove the marker. Fixed issues keep their test in `tests/unit/test_fixed_bugs.py`.
+A fix turns it into a strict `XPASS` failure, which is the cue to remove the marker. Fixed issues keep their test as a regular regression test.
 
 ## Summary
 

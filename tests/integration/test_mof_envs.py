@@ -43,3 +43,10 @@ def test_reach_episodes_last_max_episode_steps():
         _, _, done, _ = env.step(torch.zeros(env.action_space.shape))
         steps += 1
     assert steps == 50
+
+
+# BUGS_AND_PITFALLS.md #11 (fixed).
+def test_the_seed_makes_environments_reproducible():
+    first = [envs.make_env("mof", "PushRed_2to2Distractors_Dense-v1", (64, 64), 50, 2, seed=3).reset()
+             for _ in range(2)]
+    assert torch.equal(first[0], first[1])

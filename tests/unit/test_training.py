@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 import torch
 
-from tests.conftest import make_online_trainer, make_tiny_sold
+from tests.conftest import add_episode, make_episode, make_online_trainer, make_tiny_sold
 from tests import fakes
 from utils import training
 from utils.training import OnlineProgressBar, print_summary, set_seed
@@ -240,3 +240,59 @@ def test_on_load_checkpoint_without_trainer_ignores_the_replay_buffer(tiny_sold,
     (tmp_path / "saved").mkdir()  # Exists, but there is no trainer (and no logger directory) to restore into (#6).
     tiny_sold.on_load_checkpoint({"num_steps": 5, "num_episodes": 1, "replay_buffer_path": tmp_path / "saved"})
     assert tiny_sold.num_steps == 5 and not hasattr(tiny_sold, "replay_buffer")
+
+
+# BUGS_AND_PITFALLS.md #3a (fixed).
+def test_progress_bar_creates_its_display_on_train_start(tiny_sold):
+    from lightning import Trainer
+    bar = OnlineProgressBar()
+    trainer = Trainer(accelerator="cpu", logger=False, callbacks=[bar], enable_model_summary=False)
+    bar.setup(trainer, tiny_sold, stage="fit")
+    bar.on_train_start(trainer, tiny_sold)
+    # Lightning >= 2.5.3 calls on_train_batch_end -> _add_task, which asserts that the display exists.
+    assert bar.progress is not None
+
+
+# BUGS_AND_PITFALLS.md #4 (fixed).
+def test_resuming_restores_the_saved_replay_buffer(tiny_sold, tmp_path):
+    from datasets.ring_buffer import RingBufferDataset
+    saved = RingBufferDataset(20, 2, 3, save_path=str(tmp_path / "saved"))
+    add_episode(saved, make_episode(5))
+    checkpoint = {"num_steps": 5, "num_episodes": 1, "replay_buffer_path": tmp_path / "saved",
+                  "replay_buffer_capacity": 20, "replay_buffer_info": saved.info, "replay_buffer_head": saved.head,
+                  "replay_buffer_tail": saved.tail, "replay_buffer_episode_boundaries": saved.episode_boundaries}
+    tiny_sold._trainer = mock.Mock()  # Resuming happens inside trainer.fit (see #6 for the case without one).
+    with mock.patch.object(type(tiny_sold), "logger", new_callable=mock.PropertyMock,
+                           return_value=SimpleNamespace(log_dir=str(tmp_path / "run"))):
+        tiny_sold.on_load_checkpoint(checkpoint)
+    assert tiny_sold.replay_buffer.num_episodes == 1 and tiny_sold.replay_buffer.tail == 5
+    assert np.array_equal(tiny_sold.replay_buffer.ring_buffer["obs"], saved.ring_buffer["obs"])
+
+
+# BUGS_AND_PITFALLS.md #5 (fixed).
+def test_pruning_keeps_the_newest_replay_buffer(tiny_sold, tmp_path):
+    checkpoints_dir = tmp_path / "checkpoints"
+    (checkpoints_dir / "replay_buffer-steps=9000-episode=180").mkdir(parents=True)
+    live = tmp_path / "live"
+    live.mkdir()
+    (live / "obs.dat").write_bytes(b"x")
+    tiny_sold.save_replay_buffer, tiny_sold.num_steps, tiny_sold.num_episodes = True, 10500, 210
+    tiny_sold.replay_buffer = SimpleNamespace(save_path=str(live), capacity=1, info=None, head=0, tail=0,
+                                              episode_boundaries=[])
+    checkpoint = {}
+    with mock.patch.object(type(tiny_sold), "checkpoints_dir", new_callable=mock.PropertyMock,
+                           return_value=checkpoints_dir):
+        tiny_sold.on_save_checkpoint(checkpoint)
+    assert [p.name for p in checkpoints_dir.iterdir()] == ["replay_buffer-steps=10500-episode=210"]
+    assert checkpoint["replay_buffer_path"].exists()
+
+
+# BUGS_AND_PITFALLS.md #6 (fixed).
+def test_latest_checkpoint_loads_without_a_trainer(fitted):
+    from train_sold import SOLDModule
+    _, _, log_dir = fitted
+    checkpoints_dir = log_dir / "checkpoints"
+    assert list(checkpoints_dir.glob("replay_buffer-*")), "precondition: the replay buffer copy exists"
+    latest = sorted(checkpoints_dir.glob("*.ckpt"))[-1]
+    loaded = SOLDModule.load_from_checkpoint(latest, env=fakes.make_fake_env())  # As evaluate_sold.py does.
+    assert loaded.num_steps == torch.load(latest, weights_only=False)["num_steps"]

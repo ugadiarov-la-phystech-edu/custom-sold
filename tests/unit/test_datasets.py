@@ -11,7 +11,7 @@ from datasets.image import ImageDataset, NPZDataset, PNGDataset, load_image_data
 from datasets.info import ColorImage, EpisodeDatasetInfo, Fields, FieldType, Scalar, TensorType, Vector
 from datasets.ring_buffer import EpisodeDataset, RingBufferDataset
 from datasets.utils import NumUpdatesWrapper
-from tests.conftest import write_image_dataset
+from tests.conftest import add_episode, make_episode, write_image_dataset
 
 
 # ------------------------------------------------------------------------------------- info
@@ -63,21 +63,6 @@ def test_episode_dataset_info_defaults():
 
 
 # ------------------------------------------------------------------------------ ring buffer
-def _episode(length, start=0, action_dim=2):
-    """Episode in SOLD's format: obs[t], action[t] that led to obs[t] (NaN at t=0), reward[t] (NaN at t=0)."""
-    obs = [torch.full((3, 2, 2), start + t, dtype=torch.uint8) for t in range(length)]
-    action = [torch.full((action_dim,), float("nan"))] + [torch.full((action_dim,), float(start + t))
-                                                           for t in range(1, length)]
-    reward = [torch.tensor(float("nan"))] + [torch.tensor(float(start + t)) for t in range(1, length)]
-    return {"obs": obs, "action": action, "reward": reward}
-
-
-def _add(buffer, episode):
-    length = len(episode["obs"])
-    for t in range(length):
-        buffer.add_step({key: values[t] for key, values in episode.items()}, done=t == length - 1)
-
-
 @pytest.fixture
 def buffer(tmp_path):
     return RingBufferDataset(capacity=10, batch_size=4, sequence_length=3, save_path=str(tmp_path / "rb"))
@@ -99,7 +84,7 @@ def test_ring_buffer_add_step_converts_non_tensors(buffer):
 
 
 def test_ring_buffer_stores_episode_and_statistics(buffer):
-    _add(buffer, _episode(4))
+    add_episode(buffer, make_episode(4))
     assert (buffer.num_episodes, buffer.num_timesteps, buffer.episode_lengths) == (1, 4, [4])
     assert buffer.last_episode_return.item() == pytest.approx(1 + 2 + 3)
     assert buffer.ring_buffer["obs"][:4, 0, 0, 0].tolist() == [0, 1, 2, 3]
@@ -109,9 +94,9 @@ def test_ring_buffer_stores_episode_and_statistics(buffer):
 
 
 def test_ring_buffer_wraps_and_evicts_oldest(buffer):
-    _add(buffer, _episode(4, start=0))
-    _add(buffer, _episode(4, start=10))
-    _add(buffer, _episode(4, start=20))  # Needs eviction of the first episode and wraps around.
+    add_episode(buffer, make_episode(4, start=0))
+    add_episode(buffer, make_episode(4, start=10))
+    add_episode(buffer, make_episode(4, start=20))  # Needs eviction of the first episode and wraps around.
     assert buffer.num_episodes == 2 and buffer.num_timesteps == 8 and buffer.is_full
     assert list(buffer.episode_boundaries) == [(4, 8), (8, 12)]  # Boundaries are stored unwrapped.
     assert buffer.head == 4 and buffer.tail == 2
@@ -119,15 +104,15 @@ def test_ring_buffer_wraps_and_evicts_oldest(buffer):
 
 
 def test_ring_buffer_remove_last_episode_sets_head_to_tail(buffer):
-    _add(buffer, _episode(4))
+    add_episode(buffer, make_episode(4))
     buffer.remove_episode()
     assert buffer.head == buffer.tail == 4 and len(buffer.episode_boundaries) == 0
 
 
 def test_ring_buffer_sample_returns_contiguous_sequences(buffer):
-    _add(buffer, _episode(4, start=0))
-    _add(buffer, _episode(4, start=10))
-    _add(buffer, _episode(4, start=20))
+    add_episode(buffer, make_episode(4, start=0))
+    add_episode(buffer, make_episode(4, start=10))
+    add_episode(buffer, make_episode(4, start=20))
     for _ in range(20):
         batch = buffer.sample()
         assert batch["obs"].shape == (4, 3, 3, 2, 2) and batch["action"].shape == (4, 3, 2)
@@ -139,20 +124,20 @@ def test_ring_buffer_sample_returns_contiguous_sequences(buffer):
 
 def test_ring_buffer_sequence_length_none_samples_all_episodes(tmp_path):
     buffer = RingBufferDataset(capacity=10, batch_size=2, sequence_length=2, save_path=str(tmp_path))
-    _add(buffer, _episode(3))
+    add_episode(buffer, make_episode(3))
     buffer.sequence_length = None
     with pytest.raises(TypeError):  # sequence_length=None is half-supported: sampling cannot build windows.
         buffer.sample()
 
 
 def test_ring_buffer_is_empty_warns_when_episodes_are_too_short(buffer):
-    _add(buffer, _episode(2))
+    add_episode(buffer, make_episode(2))
     with pytest.warns(UserWarning, match="none are of sufficient length"):
         assert buffer.is_empty
 
 
 def test_ring_buffer_files_and_load_from_disk_storage(buffer, tmp_path, capsys):
-    _add(buffer, _episode(4))
+    add_episode(buffer, make_episode(4))
     assert "Total estimated replay buffer size (GB)" in capsys.readouterr().out
     buffer.ring_buffer["obs"].flush()
     assert sorted(p.name for p in (tmp_path / "rb").iterdir()) == ["action.dat", "obs.dat", "reward.dat"]
@@ -197,9 +182,25 @@ def test_episode_dataset_is_abstract(tmp_path):
 
 def test_num_updates_wrapper(buffer):
     assert list(NumUpdatesWrapper(buffer, 3)) == []
-    _add(buffer, _episode(4))
+    add_episode(buffer, make_episode(4))
     batches = list(NumUpdatesWrapper(buffer, 3))
     assert len(batches) == 3 and batches[0]["obs"].shape == (4, 3, 3, 2, 2)
+
+
+# BUGS_AND_PITFALLS.md #19 (fixed).
+def test_replay_buffer_can_sample_the_last_window(tmp_path):
+    buffer = RingBufferDataset(capacity=10, batch_size=64, sequence_length=3, save_path=str(tmp_path))
+    add_episode(buffer, make_episode(4))
+    starts = set(buffer.sample()["obs"][:, 0, 0, 0, 0].tolist())
+    assert starts == {0, 1}
+
+
+# BUGS_AND_PITFALLS.md #25 (fixed).
+def test_ring_buffer_accepts_predefined_fields(tmp_path):
+    fields = Fields(obs=TensorType(device="cpu", dtype=torch.uint8, shape=(3, 2, 2)))
+    buffer = RingBufferDataset(5, 1, 1, info=EpisodeDatasetInfo(fields=fields), save_path=str(tmp_path))
+    assert buffer.ring_buffer["obs"].shape == (5, 3, 2, 2)
+
 
 
 # ---------------------------------------------------------------------------- image datasets
@@ -246,3 +247,19 @@ def test_image_dataset_base_class(tmp_path):
     dataset = ImageDataset(str(tmp_path), "run", "train", 4)
     images, actions, rewards = dataset._load_npz_data(0)
     assert images.shape == (7, 16, 16, 3) and actions.shape == (6, 2) and rewards.shape == (6,)
+
+
+# BUGS_AND_PITFALLS.md #14 (fixed).
+def test_episode_of_exactly_sequence_length_can_be_loaded(tmp_path):
+    write_image_dataset(tmp_path / "run", "npz", episode_length=4)
+    images, _ = load_image_dataset(str(tmp_path), "run", "train", sequence_length=4)[0]
+    assert images.shape[0] == 4
+
+
+# BUGS_AND_PITFALLS.md #14 (fixed).
+def test_random_crop_can_use_the_last_window(tmp_path):
+    write_image_dataset(tmp_path / "run", "npz", episode_length=7)
+    dataset = load_image_dataset(str(tmp_path), "run", "train", sequence_length=4)
+    images = np.load(tmp_path / "run" / "train" / "0" / "episode.npz")["images"]
+    last_window = torch.from_numpy(images[3:7]).permute(0, 3, 1, 2) / 255.
+    assert any(torch.allclose(dataset[0][0], last_window) for _ in range(200))

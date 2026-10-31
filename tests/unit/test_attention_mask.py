@@ -89,3 +89,20 @@ def test_show_draws_the_mask(monkeypatch):
 @pytest.mark.xfail(strict=True, reason="BUGS_AND_PITFALLS.md #32: ALiBi slopes differ from the original formula")
 def test_alibi_slopes_match_press_et_al():
     assert AlibiMask(2, 8, 1).get_slopes(8) == pytest.approx([2 ** -(i + 1) for i in range(8)])
+
+
+# BUGS_AND_PITFALLS.md #20 (fixed).
+def test_wrong_mask_size_raises_value_error():
+    mask = CausalMask(2, 1, 1)
+    mask._full_mask = torch.zeros(1, 3, 3)
+    with pytest.raises(ValueError):
+        mask(batch_size=1, sequence_length=1)
+
+
+# BUGS_AND_PITFALLS.md #21 (fixed).
+def test_mask_plot_title_shows_the_requested_head(monkeypatch):
+    monkeypatch.setattr(plt, "show", lambda: None)
+    CausalMask(2, 2, 1).show(head=1)
+    title = plt.gca().get_title()
+    plt.close("all")
+    assert title.endswith("(head=1)")

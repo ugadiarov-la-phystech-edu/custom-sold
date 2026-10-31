@@ -1,8 +1,8 @@
 """envs: wrappers, make_env for every suite, multi_object_fetch distractor sampling, dm_control adapters."""
 
 import importlib
+import sys
 
-import gym
 import numpy as np
 import pytest
 import torch
@@ -157,6 +157,47 @@ def test_to_tensor_dict_with_fake_modules(monkeypatch):
     obs, reward, terminated, truncated, info = env.step(torch.ones(2, requires_grad=True))
     assert (reward, terminated, truncated, info) == (0.5, False, True, {"step": True})
     assert isinstance(obs, fakes.FakeTensorDict) and isinstance(inner.received_actions[0], np.ndarray)
+
+
+# BUGS_AND_PITFALLS.md #8 (fixed).
+def test_survival_suite_is_usable_or_rejected_cleanly():
+    try:
+        envs.make_env("survival", "Forage", (16, 16), 10, 1)
+    except ValueError:
+        pass  # Removing the suite is a valid fix.
+
+
+# BUGS_AND_PITFALLS.md #12 (fixed).
+def test_distractor_wrapper_does_not_leak_environments(monkeypatch):
+    import envs.from_mof as from_mof
+    created = []
+
+    def fake_make_gym_env(name, image_size, max_episode_steps, action_repeat, seed):
+        created.append(fakes.FakePixelEnv())
+        return Pixels(created[-1], image_size)
+
+    monkeypatch.setattr(from_mof, "make_gym_env", fake_make_gym_env)
+    env = from_mof.make_env("PushRed_1to3Distractors_Dense-v1", (8, 8), 50, 2)
+    for _ in range(30):
+        env.reset()
+    alive = [inner for inner in created if not inner.closed]
+    assert len(alive) <= 3, f"{len(alive)} environments are still open after 30 resets"
+
+
+# BUGS_AND_PITFALLS.md #15 (fixed).
+def test_pixels_wrapper_does_not_require_multi_object_fetch(monkeypatch):
+    monkeypatch.setitem(sys.modules, "multi_object_fetch", None)
+    monkeypatch.setitem(sys.modules, "multi_object_fetch.env", None)
+    monkeypatch.delitem(sys.modules, "envs.wrappers.pixels")
+    pixels = importlib.import_module("envs.wrappers.pixels")
+    assert pixels.Pixels(fakes.FakePixelEnv(), (8, 8)).reset().shape == (3, 8, 8)
+
+
+# BUGS_AND_PITFALLS.md #24 (fixed).
+def test_pixels_observation_matches_observation_space_for_non_square_sizes():
+    env = Pixels(fakes.FakePixelEnv(), image_size=(8, 6))
+    assert env.reset().shape == env.observation_space.shape
+
 
 
 # ------------------------------------------------------------------------------- dm_control

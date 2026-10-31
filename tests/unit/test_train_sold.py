@@ -1,12 +1,14 @@
 """train_sold.SOLDModule: construction, losses, imagination and action selection."""
 
+from pathlib import Path
+
+import numpy as np
 import pytest
 import torch
 
 from modeling.distributions import TwoHotEncodingDistribution
 from tests import fakes
-from tests.conftest import make_tiny_sold
-from train_sold import SOLDModule
+from tests.conftest import make_online_trainer, make_tiny_sold
 
 
 class LogRecorder:
@@ -248,3 +250,43 @@ def test_imagined_actions_stay_within_the_action_space():
     sold.imagine_ahead(slots, actions)
     imagined = torch.cat(used)
     assert imagined.abs().max() <= 1.0, f"dynamics model receives actions up to {imagined.abs().max():.2f}"
+
+
+# BUGS_AND_PITFALLS.md #17 (fixed).
+def test_actions_are_clamped_per_dimension():
+    env = fakes.make_fake_env()
+    env.unwrapped.action_space = env.action_space = type(env.action_space)(
+        low=np.array([-1.0, -0.1], np.float32), high=np.array([1.0, 0.1], np.float32))
+    sold = make_tiny_sold(env)
+    obs = torch.zeros(3, 16, 16, dtype=torch.uint8)
+    actions = torch.stack([sold.select_action(obs, is_first=True, mode="train") for _ in range(50)])
+    assert actions[:, 1].abs().max() <= 0.1 + 1e-6
+
+
+# BUGS_AND_PITFALLS.md #17 (fixed).
+def test_autoencoder_optimizer_state_is_checkpointed(tmp_path):
+    sold = make_tiny_sold(finetune_autoencoder=True, max_steps=20)
+    trainer = make_online_trainer(tmp_path)
+    trainer.fit(sold)
+    checkpoint = torch.load(next((Path(trainer.logger.log_dir) / "checkpoints").glob("*.ckpt")), weights_only=False)
+    saved = sum(len(group["params"]) for state in checkpoint["optimizer_states"] for group in state["param_groups"])
+    expected = sum(len(list(module.parameters())) for module in
+                   [sold.dynamics_predictor, sold.reward_predictor, sold.actor, sold.critic, sold.autoencoder])
+    assert saved == expected
+
+
+# BUGS_AND_PITFALLS.md #17 (fixed).
+def test_no_autoencoder_graph_without_finetuning(tmp_path, monkeypatch):
+    from train_autoencoder import AutoencoderModule
+    recorded = []
+    original = AutoencoderModule.compute_reconstruction_loss
+
+    def recording(module, images, actions):
+        outputs = original(module, images, actions)
+        recorded.append(outputs["reconstruction_loss"].requires_grad)
+        return outputs
+
+    monkeypatch.setattr(AutoencoderModule, "compute_reconstruction_loss", recording)
+    trainer = make_online_trainer(tmp_path)
+    trainer.fit(make_tiny_sold(finetune_autoencoder=False, max_steps=15))
+    assert recorded and not any(recorded)

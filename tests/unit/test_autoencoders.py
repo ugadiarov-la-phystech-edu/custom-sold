@@ -2,11 +2,12 @@
 
 import functools
 import os
-from types import SimpleNamespace
 from unittest import mock
 
+import hydra
 import pytest
 import torch
+from omegaconf import OmegaConf
 
 from modeling.autoencoder.base import Autoencoder
 from modeling.autoencoder.cnn import CnnDecoder, CnnEncoder
@@ -15,13 +16,12 @@ from modeling.autoencoder.cnn.decoder import Decoder
 from modeling.autoencoder.cnn.encoder import SamePadConv2d
 from modeling.autoencoder.logging import LoggingCallback, LogReconstruction
 from modeling.autoencoder.savi import Corrector, SaviCnnDecoder, SaviCnnEncoder
-from modeling.autoencoder.savi.autoencoder import SAVi
 from modeling.autoencoder.savi.encoder import ImagePositionalEmbedding
 from modeling.autoencoder.savi.initializer import Learned, LearnedRandom, SlotInitializer
 from modeling.autoencoder.savi.predictor import (ActionConditionalTransformerPredictor, MetaAttention,
                                                  MultiHeadSelfAttention, TransformerBlock, TransformerPredictor,
                                                  init_xavier_)
-from tests.conftest import make_tiny_savi
+from tests.conftest import CONFIGS_DIR, make_tiny_savi
 
 
 # ----------------------------------------------------------------------------------- CNN parts
@@ -106,6 +106,16 @@ def test_base_forward_requires_reconstructions():
     # The abstract property bodies only 'pass'.
     assert Autoencoder.num_slots.fget(None) is None and Autoencoder.slot_dim.fget(None) is None
     assert Autoencoder.encode(None, None, None) is None and Autoencoder.decode(None, None) is None
+
+
+# BUGS_AND_PITFALLS.md #23 (fixed).
+def test_cnn_autoencoder_config_can_be_instantiated():
+    from utils.instantiate import fill_in_missing
+    cfg = OmegaConf.load(CONFIGS_DIR / "autoencoder" / "cnn.yaml")
+    fill_in_missing(cfg, {"image_size": [16, 16]})  # As train_autoencoder.py does with the dataset infos.
+    autoencoder = hydra.utils.instantiate(cfg)
+    assert autoencoder(torch.rand(1, 2, 3, 16, 16), torch.zeros(1, 1, 2))["reconstructions"].shape == (1, 2, 3, 16, 16)
+
 
 
 # ------------------------------------------------------------------------------------- SAVi
@@ -268,6 +278,19 @@ def test_savi_visualize_reconstruction(with_images, with_ticks):
     if with_ticks:
         expected_height += 2 + (16 // 3 + 4)
     assert image.shape == (3, expected_height, 3 * 18 + 2)
+
+
+# BUGS_AND_PITFALLS.md #17 (fixed).
+def test_savi_initializes_slot_distribution_parameters():
+    class CorrectorWithSlotDistribution(Corrector):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.slots_mu = torch.nn.Parameter(torch.zeros(1, 1, self.slot_dim))
+            self.slots_sigma = torch.nn.Parameter(torch.zeros(1, 1, self.slot_dim))
+
+    savi = make_tiny_savi()
+    savi.corrector = CorrectorWithSlotDistribution(2, 8, 8, 1, 2, 8)
+    savi._initialize_parameters()  # Reads the non-existent corrector.dim_slots.
 
 
 # ----------------------------------------------------------------------------- logging callbacks

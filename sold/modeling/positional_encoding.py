@@ -8,7 +8,6 @@ This module provides positional encodings designed for this input type. They gen
 
 from abc import ABC
 import math
-import numpy as np
 import torch
 import torch.nn as nn
 

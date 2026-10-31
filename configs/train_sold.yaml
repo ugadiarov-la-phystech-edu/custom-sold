@@ -59,21 +59,6 @@ model:
     _target_: train_autoencoder.load_autoencoder
     checkpoint_path: ../checkpoints/autoencoder/savi/reach_red/latest.ckpt
 
-#    _target_: modeling.autoencoder.cnn.autoencoder.Cnn
-#    encoder:
-#      _target_: modeling.autoencoder.cnn.CnnEncoder
-#      num_channels: [ 32, 64, 128, 128 ]
-#      kernel_sizes: [ 3, 3, 3, 3 ]
-#      strides: [ 2, 2, 2, 2 ]
-#    decoder:
-#      _target_: modeling.autoencoder.cnn.CnnDecoder
-#      _partial_: True
-#      image_size: ${...env.image_size}
-#      num_channels: [ 128, 128, 64, 32 ]
-#      kernel_sizes: [ 3, 3, 3, 3 ]
-#      strides: [ 2, 2, 2, 2 ]
-
-
   dynamics_predictor:
     _target_: modeling.sold.dynamics.make_ocvp_seq_dynamics_model
     _partial_: True

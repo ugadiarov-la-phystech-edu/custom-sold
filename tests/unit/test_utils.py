@@ -2,6 +2,8 @@
 
 import json
 import os
+from pathlib import Path
+import sys
 from unittest import mock
 
 import numpy as np
@@ -12,18 +14,18 @@ from omegaconf import OmegaConf
 from utils import visualizations as vis
 from utils.instantiate import fill_in_missing, instantiate_dataloaders, instantiate_many, instantiate_trainer
 from utils.logging import ExtendedTensorBoardLogger, LoggingStepMixin
-from utils.module import FreezeParameters, get_parameters
+from utils.module import FreezeParameters
 from tests.conftest import write_image_dataset
 
 
 # ----------------------------------------------------------------------------------- module
-def test_get_parameters_and_freeze_restores_state():
+def test_freeze_parameters_restores_state():
     a, b = torch.nn.Linear(2, 2), torch.nn.Linear(2, 1)
     b.bias.requires_grad = False
-    assert len(get_parameters([a, b])) == 4
+    parameters = [*a.parameters(), *b.parameters()]
     with FreezeParameters([a, b]):
-        assert not any(p.requires_grad for p in get_parameters([a, b]))
-    assert [p.requires_grad for p in get_parameters([a, b])] == [True, True, True, False]
+        assert not any(p.requires_grad for p in parameters)
+    assert [p.requires_grad for p in parameters] == [True, True, True, False]
     with pytest.raises(RuntimeError):
         with FreezeParameters([a]):
             raise RuntimeError("propagates")
@@ -159,6 +161,16 @@ def test_log_gradients_logs_norm_of_available_grads():
     assert module.calls[0][1] == pytest.approx(np.sqrt(18.0))
 
 
+# BUGS_AND_PITFALLS.md #18 (fixed).
+def test_last_metrics_record_is_written_when_training_ends(tmp_path):
+    logger = ExtendedTensorBoardLogger(save_dir=str(tmp_path), name="logs")
+    logger.log_metrics({"loss": 1.0}, step=1)
+    logger.log_metrics({"loss": 2.0}, step=2)
+    logger.finalize("success")
+    records = [json.loads(line) for line in open(Path(logger.log_dir) / "metrics" / "metrics.jsonl")]
+    assert records[-1] == {"step": 2, "loss": 2.0}
+
+
 # ------------------------------------------------------------------------------ visualizations
 def test_slot_color():
     assert torch.allclose(vis.slot_color(0, 3), torch.tensor([1.0, 0.0, 0.0]))
@@ -248,3 +260,15 @@ def test_attention_visualizations():
                                                                                                       32),
                                                    torch.rand(seq, slots, 1, 32, 32))
     assert out.shape == (3, 4 * 36 + 3 * 2, seq * 34 + 2)
+
+
+# BUGS_AND_PITFALLS.md #22 (fixed).
+def test_attention_visualization_does_not_stack_forward_wrappers():
+    from modeling.sold.prediction import TwoHotPredictor
+    model = TwoHotPredictor(max_episode_steps=4, num_slots=2, slot_dim=4, token_dim=8, num_heads=2, num_layers=1,
+                            hidden_dim=8)
+    slots = torch.randn(1, 3, 2, 4)
+    for _ in range(sys.getrecursionlimit() + 100):  # One call per evaluation during training.
+        vis.get_attention_weights(model, slots)
+    model(slots)  # RecursionError while the wrappers pile up.
+    assert all("forward" not in vars(m) for m in model.modules() if isinstance(m, torch.nn.MultiheadAttention))

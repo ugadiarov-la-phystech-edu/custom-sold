@@ -1,4 +1,4 @@
-from modeling.positional_encoding import SinusoidalPositionalEncoding, TokenWiseSinusoidalPositionalEncoding
+from modeling.positional_encoding import SinusoidalPositionalEncoding
 import torch
 import torch.nn as nn
 

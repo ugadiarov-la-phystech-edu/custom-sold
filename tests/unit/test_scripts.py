@@ -1,5 +1,6 @@
 """Functions in the entry-point scripts: train_autoencoder, generate_dataset and evaluate_sold."""
 
+import ast
 import functools
 import os
 
@@ -12,7 +13,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 import evaluate_sold
 import generate_dataset
-from tests.conftest import make_tiny_savi, make_tiny_sold
+from tests.conftest import CONFIGS_DIR, SOLD_DIR, make_tiny_savi, make_tiny_sold
 from train_autoencoder import AutoencoderModule, load_autoencoder
 
 
@@ -65,6 +66,27 @@ def test_autoencoder_fit_and_load_checkpoint(tmp_path):
         assert torch.equal(a, b)
 
 
+# BUGS_AND_PITFALLS.md #2 (fixed).
+def test_savi_dataset_path_is_not_hardcoded():
+    dataset = OmegaConf.load(CONFIGS_DIR / "train_autoencoder.yaml").dataset
+    if OmegaConf.is_missing(dataset, "path") or OmegaConf.is_missing(dataset, "data_dir"):
+        return  # Mandatory command-line values: nothing machine-specific in the config.
+    configured = SOLD_DIR / dataset.path / dataset.data_dir
+    assert configured.exists(), f"dataset points at {configured}, which only exists on the author's machine"
+
+
+# BUGS_AND_PITFALLS.md #27 (fixed).
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a GPU to create a GPU checkpoint")
+def test_savi_checkpoints_saved_on_gpu_load_on_cpu(tmp_path):
+    module = AutoencoderModule(make_tiny_savi().cuda(), functools.partial(torch.optim.Adam))
+    trainer = Trainer(accelerator="cpu", logger=False, enable_checkpointing=False, max_steps=0)
+    trainer.strategy.connect(module)
+    trainer.save_checkpoint(tmp_path / "savi.ckpt")
+    autoencoder = load_autoencoder(str(tmp_path / "savi.ckpt"))
+    assert next(autoencoder.parameters()).device.type == "cpu", "a CPU-only machine could not load this checkpoint"
+
+
+
 # ------------------------------------------------------------------------------- generate_dataset
 def _dataset_cfg(save_format):
     return OmegaConf.create({"save_format": save_format,
@@ -94,6 +116,25 @@ def test_save_episode_rejects_unknown_format(tmp_path):
         generate_dataset.save_episode(str(tmp_path / "0"), _dataset_cfg("gif"))
     with pytest.raises(FileExistsError):  # Refuses to overwrite an episode folder.
         generate_dataset.save_episode(str(tmp_path / "0"), _dataset_cfg("npz"))
+
+
+# BUGS_AND_PITFALLS.md #13 (fixed).
+def test_savi_pretraining_uses_the_action_that_led_to_the_next_frame(tmp_path):
+    from datasets.image import NPZDataset
+    cfg = OmegaConf.create({"save_format": "npz", "env": {"_target_": "tests.fakes.make_fake_env",
+                                                          "max_episode_steps": 6, "action_repeat": 1}})
+    (tmp_path / "run" / "val").mkdir(parents=True)
+    generate_dataset.save_episode(str(tmp_path / "run" / "val" / "0"), cfg)
+    taken = np.load(tmp_path / "run" / "val" / "0" / "episode.npz")["actions"]  # taken[t] moves frame t -> t+1.
+    images, actions = NPZDataset(str(tmp_path), "run", "val", 4)[0]
+
+    savi = make_tiny_savi(action_conditional=True)
+    used = []
+    original = savi.predictor.forward
+    savi.predictor.forward = lambda slots, actions: (used.append(actions[0].clone()), original(slots, actions))[1]
+    AutoencoderModule(savi, functools.partial(torch.optim.Adam)).compute_reconstruction_loss(images[None], actions[None])
+    for t in range(3):  # The predictor turns the slots of frame t into a prediction for frame t + 1.
+        assert torch.allclose(used[t], torch.from_numpy(taken[t])), f"step {t} uses the action of step {t + 1}"
 
 
 # --------------------------------------------------------------------------------- evaluate_sold
@@ -129,3 +170,27 @@ def test_evaluate_play_episode_without_success(monkeypatch):
     original_step = sold.env.unwrapped.step
     monkeypatch.setattr(sold.env.unwrapped, "step", lambda action: original_step(action)[:3] + ({},))
     assert "success" not in evaluate_sold.play_episode(sold, mode="train")
+
+
+# BUGS_AND_PITFALLS.md #7 (fixed).
+def test_evaluation_updates_the_last_action():
+    sold = make_tiny_sold()
+    seen = []
+    original = sold.autoencoder.encode
+    sold.autoencoder.encode = lambda images, actions, prior_slots=None: (seen.append(actions.clone()),
+                                                                          original(images, actions, prior_slots))[1]
+    evaluate_sold.play_episode(sold, mode="eval")
+    assert not torch.isnan(seen[-1]).any(), "the SAVi encoder still receives the initial NaN action"
+
+
+# ---------------------------------------------------------------------------------- all scripts
+# BUGS_AND_PITFALLS.md #16 (fixed).
+def test_all_scripts_use_the_same_hydra_version_base():
+    version_bases = {}
+    for script in ["generate_dataset.py", "train_autoencoder.py", "train_sold.py", "evaluate_sold.py"]:
+        tree = ast.parse((SOLD_DIR / script).read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "main":
+                keywords = {k.arg: ast.literal_eval(k.value) for k in node.keywords}
+                version_bases[script] = keywords.get("version_base", "<not set>")
+    assert len(set(version_bases.values())) == 1, version_bases

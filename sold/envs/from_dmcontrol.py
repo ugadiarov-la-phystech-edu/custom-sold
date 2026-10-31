@@ -122,7 +122,7 @@ class TimeStepToGymWrapper:
         for v in env.observation_spec().values():
             try:
                 shp = np.prod(v.shape)
-            except:
+            except Exception:
                 shp = 1
             obs_shp.append(shp)
         obs_shp = (int(np.sum(obs_shp)),)

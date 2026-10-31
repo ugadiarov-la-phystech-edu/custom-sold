@@ -124,6 +124,22 @@ def make_online_trainer(tmp_path, **kwargs):
 
 
 # ----------------------------------------------------------------------------------- datasets
+def make_episode(length, start=0, action_dim=2):
+    """An episode in SOLD's format: obs[t], the action[t] that led to it and reward[t] (both NaN at t=0)."""
+    obs = [torch.full((3, 2, 2), start + t, dtype=torch.uint8) for t in range(length)]
+    action = [torch.full((action_dim,), float("nan"))] + [torch.full((action_dim,), float(start + t))
+                                                           for t in range(1, length)]
+    reward = [torch.tensor(float("nan"))] + [torch.tensor(float(start + t)) for t in range(1, length)]
+    return {"obs": obs, "action": action, "reward": reward}
+
+
+def add_episode(buffer, episode):
+    length = len(episode["obs"])
+    for t in range(length):
+        buffer.add_step({key: values[t] for key, values in episode.items()}, done=t == length - 1)
+
+
+
 def write_image_dataset(root: Path, save_format: str = "npz", num_episodes=(3, 2), episode_length: int = 7,
                         image_size=(16, 16), action_dim: int = 2) -> Path:
     """Write a dataset in the layout produced by generate_dataset.py: root/<split>/<episode>/..."""

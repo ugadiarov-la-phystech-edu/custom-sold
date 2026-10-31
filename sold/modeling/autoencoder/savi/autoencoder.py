@@ -3,9 +3,8 @@ from modeling.autoencoder.base import Autoencoder
 from modeling.autoencoder.savi import Corrector, SlotInitializer, Predictor, SaviCnnEncoder, SaviCnnDecoder
 from modeling.autoencoder.savi.predictor import init_xavier_
 import torch
-import torch.nn as nn
 from typing import Dict, Optional
-from utils.visualizations import make_grid, make_row, stack_rows, create_segmentation_overlay, slot_color, draw_ticks
+from utils.visualizations import make_row, stack_rows, create_segmentation_overlay, slot_color, draw_ticks
 
 
 class SAVi(Autoencoder):

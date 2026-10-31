@@ -1,6 +1,6 @@
-from modeling.attention_mask import AttentionMask, CausalMask, AlibiMask
+from modeling.attention_mask import AlibiMask
 from modeling.distributions import TwoHotEncodingDistribution
-from modeling.positional_encoding import PositionalEncoding, NoPositionalEncoding, LearnedEncoding, SinusoidalEncoding
+from modeling.positional_encoding import NoPositionalEncoding
 from .slot_aggregation_transformer import SlotAggregationTransformer
 import torch
 import torch.distributions as D
@@ -29,10 +29,6 @@ class Predictor(nn.Module):
         super().__init__()
         attention_mask = AlibiMask(max_episode_steps, num_heads, num_slots, num_register_tokens)
         positional_encoding = NoPositionalEncoding(max_episode_steps, token_dim)
-
-        #attention_mask = CausalMask(max_episode_steps, num_heads, num_slots, num_register_tokens)
-        #positional_encoding = SinusoidalEncoding(max_episode_steps, token_dim)
-        #positional_encoding = LearnedEncoding(max_episode_steps, token_dim)
         self.slot_aggregation_transformer = SlotAggregationTransformer(
             attention_mask, positional_encoding, max_episode_steps, num_slots, slot_dim, token_dim, num_heads,
             num_layers, hidden_dim, num_register_tokens)

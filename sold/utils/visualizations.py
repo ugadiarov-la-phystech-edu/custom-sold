@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torchvision
 from torchvision.transforms.functional import rgb_to_grayscale
-from typing import List, Optional, Union
+from typing import List, Optional
 
 
 def slot_color(slot_index: int, num_slots: int, saturation: float = 1.0, lightness: float = 0.5) -> torch.Tensor:
@@ -189,7 +189,6 @@ def get_attention_weights(model: nn.Module, slots: torch.Tensor) -> torch.Tensor
 
 
 def get_output_attention_images(attention_weights, rgbs, masks):
-    import matplotlib as mpl
     cmap = mpl.colormaps['plasma']
 
     attention_brightness_images = torch.sum(

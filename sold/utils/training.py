@@ -4,12 +4,13 @@ from datasets.ring_buffer import RingBufferDataset
 from datasets.utils import NumUpdatesWrapper
 import gym
 import hydra
-from lightning import LightningModule
+from lightning import LightningModule, Trainer
 from lightning.pytorch.callbacks.progress.rich_progress import RichProgressBar
 from lightning.pytorch.utilities.types import STEP_OUTPUT
 import numpy as np
 import os
 from pathlib import Path
+from rich.progress import TaskID
 import random
 from termcolor import colored
 import shutil
@@ -52,7 +53,7 @@ def print_summary(cfg):
 class OnlineProgressBar(RichProgressBar):
     """Custom progress bar for online RL training loops."""
 
-    def on_train_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+    def on_train_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
         # Create the display and the single train task up front: Lightning >= 2.5.3 adds the task itself in
         # on_train_batch_end if none exists, which fails when the display does not exist yet.
         self.pl_module = pl_module
@@ -65,10 +66,10 @@ class OnlineProgressBar(RichProgressBar):
         train_description = f"Steps {self.pl_module.num_steps}, Episodes {max(self.pl_module.num_episodes, 0)}"
         return train_description
 
-    def on_train_epoch_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+    def on_train_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
         return
 
-    def _update(self, progress_bar_id: Optional["TaskID"], current: int, visible: bool = True) -> None:
+    def _update(self, progress_bar_id: Optional[TaskID], current: int, visible: bool = True) -> None:
         if self.progress is not None and self.is_enabled:
             self.progress.update(self.train_progress_bar_id, completed=self.pl_module.num_steps, visible=visible,
                                  description=self._get_train_description(self.trainer.current_epoch))
