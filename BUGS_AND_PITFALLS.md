@@ -170,6 +170,8 @@ IndexError: pop from empty list
 
 ### 3c. setuptools 81 and newer break `lightning-bolts`
 
+**Status:** new SAVi training no longer uses lightning-bolts: its scheduler was copied to `sold/utils/schedulers.py`. The package stays installed (and with it the `setuptools<81` pin), because existing SAVi checkpoints pickle `pl_bolts.optimizers.lr_scheduler.LinearWarmupCosineAnnealingLR` in their hyperparameters and import it when loaded. Dropping it needs a module alias for those checkpoints.
+
 `lightning-bolts` 0.7.0 imports `pkg_resources`, which recent setuptools releases no longer ship.
 Both training scripts fail, because the autoencoder config uses the bolts learning-rate scheduler and `train_sold.py` loads the autoencoder through it:
 

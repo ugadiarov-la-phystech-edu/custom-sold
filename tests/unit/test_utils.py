@@ -1,6 +1,7 @@
 """utils: module helpers, Hydra instantiation helpers, logging and visualizations."""
 
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -15,6 +16,7 @@ from utils import visualizations as vis
 from utils.instantiate import fill_in_missing, instantiate_dataloaders, instantiate_many, instantiate_trainer
 from utils.logging import ExtendedTensorBoardLogger, LoggingStepMixin
 from utils.module import FreezeParameters
+from utils.schedulers import LinearWarmupCosineAnnealingLR
 from tests.conftest import write_image_dataset
 
 
@@ -184,6 +186,41 @@ def test_last_metrics_record_is_written_when_training_ends(tmp_path):
     logger.finalize("success")
     records = [json.loads(line) for line in open(Path(logger.log_dir) / "metrics" / "metrics.jsonl")]
     assert records[-1] == {"step": 2, "loss": 2.0}
+
+
+# -------------------------------------------------------------------------------- schedulers
+def _learning_rates(scheduler_class, epochs, **kwargs):
+    optimizer = torch.optim.SGD([torch.nn.Parameter(torch.zeros(1))], lr=1e-3)
+    scheduler = scheduler_class(optimizer, **kwargs)
+    rates = []
+    for _ in range(epochs):
+        rates.append(optimizer.param_groups[0]["lr"])
+        optimizer.step()
+        scheduler.step()
+    return rates
+
+
+def test_warmup_cosine_schedule_follows_the_closed_form():
+    rates = _learning_rates(LinearWarmupCosineAnnealingLR, 30, warmup_epochs=5, max_epochs=25, warmup_start_lr=1e-4,
+                            eta_min=1e-5)
+    expected = [1e-4 + t * (1e-3 - 1e-4) / 4 for t in range(5)]
+    expected += [1e-5 + 0.5 * (1e-3 - 1e-5) * (1 + math.cos(math.pi * (t - 5) / 20)) for t in range(5, 30)]
+    assert rates == pytest.approx(expected, rel=1e-9, abs=1e-12)
+
+
+def test_warmup_cosine_schedule_matches_lightning_bolts_exactly():
+    """Copied from lightning-bolts 0.7.0; checked where it is still installed."""
+    lr_scheduler = pytest.importorskip("pl_bolts.optimizers.lr_scheduler")
+    for kwargs in [dict(warmup_epochs=10, max_epochs=40), dict(warmup_epochs=3, max_epochs=8, eta_min=1e-4)]:
+        # Past max_epochs too, covering the chainable form's restart branch.
+        assert (_learning_rates(LinearWarmupCosineAnnealingLR, 60, **kwargs)
+                == _learning_rates(lr_scheduler.LinearWarmupCosineAnnealingLR, 60, **kwargs))
+
+
+def test_warmup_cosine_schedule_warns_when_get_lr_is_called_directly():
+    scheduler = LinearWarmupCosineAnnealingLR(torch.optim.SGD([torch.nn.Parameter(torch.zeros(1))], lr=1e-3), 2, 4)
+    with pytest.warns(UserWarning, match="get_last_lr"):
+        scheduler.get_lr()
 
 
 # ------------------------------------------------------------------------------ visualizations
