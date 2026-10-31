@@ -3,7 +3,6 @@ import torch
 from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Any
 
 
 def symlog(x: Tensor) -> Tensor:
@@ -66,12 +65,15 @@ class TwoHotEncodingDistribution:
             F.one_hot(below, len(self.bins)) * weight_below[..., None]
             + F.one_hot(above, len(self.bins)) * weight_above[..., None]
         ).squeeze(-2)
-        log_pred = self.logits - torch.logsumexp(self.logits, dim=-1, keepdims=True)
+        log_pred = self.logits - torch.logsumexp(self.logits, dim=-1, keepdim=True)
         return (target * log_pred).sum(dim=self.dims)
 
 
 # Adapted from: https://github.com/Eclectic-Sheep/sheeprl/blob/c37a39eb4fdc3cb3df92890a39c60545cc451a82/sheeprl/algos/dreamer_v3/utils.py#L40
 class Moments(nn.Module):
+    low: Tensor  # Running percentiles (buffers).
+    high: Tensor
+
     def __init__(
         self,
         decay: float = 0.99,
@@ -87,7 +89,7 @@ class Moments(nn.Module):
         self.register_buffer("low", torch.zeros((), dtype=torch.float32))
         self.register_buffer("high", torch.zeros((), dtype=torch.float32))
 
-    def forward(self, x: Tensor) -> Any:
+    def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:
         low = torch.quantile(x.detach(), self._percentile_low)
         high = torch.quantile(x.detach(), self._percentile_high)
         self.low = self._decay * self.low + (1 - self._decay) * low

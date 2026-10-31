@@ -57,3 +57,21 @@ ignore = ["B905"]
 # One alphabetical block, like the original code.
 no-sections = true
 force-sort-within-sections = true
+
+[tool.mypy]
+# Type-checked: modules free of Lightning, Hydra and environment state; imports are followed silently.
+python_version = "3.11"
+mypy_path = "sold"
+files = [
+    "sold/rl",
+    "sold/modeling/distributions.py",
+    "sold/modeling/autoencoder/losses.py",
+    "sold/utils/episode_runner.py",
+    "sold/utils/schedulers.py",
+]
+follow_imports = "silent"
+ignore_missing_imports = true  # gym 0.17, hydra plugins and others are untyped.
+disallow_untyped_defs = true
+check_untyped_defs = true
+warn_unused_ignores = true
+

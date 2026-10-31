@@ -42,7 +42,8 @@ class EpisodeRunner:
         if not self.done:
             raise RuntimeError("Current training episode must have terminated before playing an episode.")
 
-        episode, info = defaultdict(list), {}
+        episode: defaultdict[str, list[Any]] = defaultdict(list)
+        info: dict[str, Any] = {}
 
         def record(obs: torch.Tensor) -> None:
             episode["obs"].append(obs.cpu())
