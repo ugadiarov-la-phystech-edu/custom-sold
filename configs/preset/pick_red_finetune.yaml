@@ -7,4 +7,6 @@ experiment: pick_red_4layers_savi8_finetune
 
 model:
   finetune_autoencoder: True
-  autoencoder_learning_rate: 0.00003  # Clip 0.05 is the default.
+  optimization:
+    autoencoder:
+      learning_rate: 0.00003  # Clip 0.05 is the default.

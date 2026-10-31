@@ -1,6 +1,7 @@
 from collections import defaultdict
+from collections.abc import Mapping
 import copy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import gym
 import hydra
 from lightning.pytorch.utilities.types import STEP_OUTPUT, OptimizerLRScheduler
@@ -20,6 +21,34 @@ from utils.instantiate import instantiate_trainer
 from utils.module import FreezeParameters
 from utils.training import OnlineModule, print_summary, set_seed
 from utils.visualizations import dynamics_figure, imagination_figures, reward_figures
+
+
+@dataclass(frozen=True)
+class OptimizerSettings:
+    """Adam learning rate and gradient-norm clip of one model."""
+
+    learning_rate: float
+    grad_clip: float
+
+
+OPTIMIZED_MODELS = ("dynamics", "reward", "actor", "critic", "autoencoder")
+
+
+def optimization_settings(
+    optimization: Mapping[str, Mapping[str, float]] | None, legacy_hparams: dict[str, Any]
+) -> dict[str, dict[str, float]]:
+    """The {learning_rate, grad_clip} settings of each model in OPTIMIZED_MODELS.
+
+    Old checkpoints store them as flat <model>_learning_rate and <model>_grad_clip hyperparameters, which are moved
+    from legacy_hparams into the result (explicit optimization settings win).
+    """
+    grouped = {model: dict(settings) for model, settings in (optimization or {}).items()}
+    for key in list(legacy_hparams):
+        model, _, setting = key.partition("_")
+        if model not in OPTIMIZED_MODELS:
+            raise TypeError(f"Unexpected argument: {key}.")
+        grouped.setdefault(model, {}).setdefault(setting, legacy_hparams.pop(key))
+    return {model: asdict(OptimizerSettings(**grouped[model])) for model in OPTIMIZED_MODELS}
 
 
 @dataclass
@@ -44,17 +73,7 @@ class SOLDModule(OnlineModule):
         actor,
         critic,
         reward_predictor,
-        dynamics_learning_rate: float,
-        dynamics_grad_clip: float,
-        actor_learning_rate: float,
-        actor_grad_clip: float,
-        critic_learning_rate: float,
-        critic_grad_clip: float,
-        reward_learning_rate: float,
-        reward_grad_clip: float,
         finetune_autoencoder: bool,
-        autoencoder_learning_rate: float,
-        autoencoder_grad_clip: float,
         num_context: int | tuple[int, int],
         imagination_horizon: int,
         start_imagination_from_every: bool,
@@ -74,7 +93,11 @@ class SOLDModule(OnlineModule):
         buffer_capacity: int,
         save_replay_buffer: bool,
         critic_regularization_weight: float = 0.1,
+        optimization: Mapping[str, Mapping[str, float]] | None = None,  # Or flat legacy_hparams (old checkpoints).
+        **legacy_hparams: Any,
     ) -> None:
+        # Before save_hyperparameters, so new checkpoints store the grouped settings.
+        optimization = optimization_settings(optimization, legacy_hparams)
         self.min_num_context, self.max_num_context = (
             (num_context, num_context) if isinstance(num_context, int) else num_context
         )
@@ -122,20 +145,10 @@ class SOLDModule(OnlineModule):
             input_buffer_size=sequence_length,
         )
 
-        self.dynamics_learning_rate = dynamics_learning_rate
-        self.dynamics_grad_clip = dynamics_grad_clip
-        self.actor_learning_rate = actor_learning_rate
-        self.actor_grad_clip = actor_grad_clip
+        self.optimizer_settings = {model: OptimizerSettings(**settings) for model, settings in optimization.items()}
         self.actor_entropy_loss_weight = actor_entropy_loss_weight
         self.actor_gradients = actor_gradients
-        self.critic_learning_rate = critic_learning_rate
-        self.critic_grad_clip = critic_grad_clip
-        self.reward_learning_rate = reward_learning_rate
-        self.reward_grad_clip = reward_grad_clip
-
         self.finetune_autoencoder = finetune_autoencoder
-        self.autoencoder_grad_clip = autoencoder_grad_clip
-        self.autoencoder_learning_rate = autoencoder_learning_rate
         self.imagination_horizon = imagination_horizon
         self.start_imagination_from_every = start_imagination_from_every
         self.return_lambda = return_lambda
@@ -151,13 +164,13 @@ class SOLDModule(OnlineModule):
 
     def configure_optimizers(self) -> OptimizerLRScheduler:
         optimizers = [
-            torch.optim.Adam(self.dynamics_predictor.parameters(), lr=self.dynamics_learning_rate),
-            torch.optim.Adam(self.reward_predictor.parameters(), lr=self.reward_learning_rate),
-            torch.optim.Adam(self.actor.parameters(), lr=self.actor_learning_rate),
-            torch.optim.Adam(self.critic.parameters(), lr=self.critic_learning_rate),
+            self._adam("dynamics", self.dynamics_predictor),
+            self._adam("reward", self.reward_predictor),
+            self._adam("actor", self.actor),
+            self._adam("critic", self.critic),
         ]
         if self.finetune_autoencoder:  # Returned here so that its state is saved in checkpoints.
-            optimizers.append(torch.optim.Adam(self.autoencoder.parameters(), lr=self.autoencoder_learning_rate))
+            optimizers.append(self._adam("autoencoder", self.autoencoder))
         return optimizers
 
     def training_step(self, batch, batch_index: int) -> STEP_OUTPUT:
@@ -174,7 +187,7 @@ class SOLDModule(OnlineModule):
         with torch.set_grad_enabled(self.finetune_autoencoder):
             reconstruction = reconstruction_loss(self.autoencoder, images, actions)
         if self.finetune_autoencoder:
-            self._optimize(autoencoder_optimizers[0], reconstruction["reconstruction_loss"], self.autoencoder_grad_clip)
+            self._optimize("autoencoder", autoencoder_optimizers[0], reconstruction["reconstruction_loss"])
 
         # Detach slots to prevent gradients from flowing back to the autoencoder model.
         slots = reconstruction["slots"].detach()
@@ -182,11 +195,11 @@ class SOLDModule(OnlineModule):
 
         # Learn to predict dynamics in slot-space.
         outputs |= self.compute_dynamics_loss(images, slots, actions)
-        self._optimize(dynamics_optimizer, outputs["dynamics_loss"], self.dynamics_grad_clip)
+        self._optimize("dynamics", dynamics_optimizer, outputs["dynamics_loss"])
 
         # Learn to predict rewards from the slot representation.
         outputs |= self.compute_reward_loss(images, outputs["reconstructions"], slots, rewards)
-        self._optimize(reward_optimizer, outputs["reward_loss"], self.reward_grad_clip)
+        self._optimize("reward", reward_optimizer, outputs["reward_loss"])
 
         # Update the target critic network.
         rl.returns.ema_update(self.critic_target, self.critic, self.critic_ema_decay)
@@ -201,13 +214,13 @@ class SOLDModule(OnlineModule):
             imagination.action_log_probs,
             imagination.action_entropies,
         )
-        self._optimize(actor_optimizer, outputs["actor_loss"], self.actor_grad_clip)
+        self._optimize("actor", actor_optimizer, outputs["actor_loss"])
 
         # Learn the critic.
         outputs |= self.compute_critic_loss(
             imagination.predicted_values_dist, imagination.lambda_returns, imagination.predicted_values_targ
         )
-        self._optimize(critic_optimizer, outputs["critic_loss"], self.critic_grad_clip)
+        self._optimize("critic", critic_optimizer, outputs["critic_loss"])
 
         if self.after_eval:
             self.log_visualizations(rewards, reconstruction, outputs, imagination)
@@ -247,10 +260,14 @@ class SOLDModule(OnlineModule):
         for name, image in figures.items():
             self.log_image(name, image)
 
-    def _optimize(self, optimizer, loss: torch.Tensor, grad_clip: float) -> None:
-        """One gradient step on loss, with the gradient norm clipped to grad_clip."""
+    def _adam(self, model_name: str, model: torch.nn.Module) -> torch.optim.Adam:
+        return torch.optim.Adam(model.parameters(), lr=self.optimizer_settings[model_name].learning_rate)
+
+    def _optimize(self, model_name: str, optimizer, loss: torch.Tensor) -> None:
+        """One gradient step on loss, clipping the gradient norm to the model's grad_clip."""
         optimizer.zero_grad()
         self.manual_backward(loss)
+        grad_clip = self.optimizer_settings[model_name].grad_clip
         self.clip_gradients(optimizer, gradient_clip_val=grad_clip, gradient_clip_algorithm="norm")
         optimizer.step()
 

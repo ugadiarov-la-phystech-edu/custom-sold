@@ -9,8 +9,9 @@ import pytest
 import rl.losses
 import rl.returns
 from tests import fakes
-from tests.conftest import make_online_trainer, make_tiny_sold
+from tests.conftest import make_online_trainer, make_tiny_sold, tiny_sold_kwargs
 import torch
+from train_sold import OptimizerSettings, SOLDModule, optimization_settings
 
 
 class LogRecorder:
@@ -72,6 +73,33 @@ def test_imagine_ahead_with_batch_size_one(tiny_sold):
         == imagination.action_log_probs.shape
         == (1, 3)
     )
+
+
+def test_optimizer_settings_are_grouped_per_model(tiny_sold):
+    assert tiny_sold.optimizer_settings["dynamics"] == OptimizerSettings(learning_rate=1e-3, grad_clip=3.0)
+    assert tiny_sold.optimizer_settings["autoencoder"].grad_clip == 0.05
+    assert tiny_sold.hparams.optimization["critic"] == {"learning_rate": 1e-3, "grad_clip": 10.0}
+
+
+def test_flat_optimizer_settings_of_old_checkpoints_are_grouped():
+    kwargs = tiny_sold_kwargs(fakes.make_fake_env())
+    flat = {
+        f"{model}_{setting}": value
+        for model, settings in kwargs.pop("optimization").items()
+        for setting, value in settings.items()
+    }
+    sold = SOLDModule(optimization=None, **kwargs, **flat)
+    assert sold.optimizer_settings["reward"] == OptimizerSettings(learning_rate=1e-3, grad_clip=10.0)
+    assert "dynamics_learning_rate" not in sold.hparams  # Checkpoints store the grouped settings.
+    assert sold.hparams.optimization["dynamics"] == {"learning_rate": 1e-3, "grad_clip": 3.0}
+
+
+def test_optimization_settings_reject_unknown_arguments_and_settings():
+    optimization = tiny_sold_kwargs(fakes.make_fake_env())["optimization"]
+    with pytest.raises(TypeError, match="Unexpected argument: foo_rate"):
+        optimization_settings(optimization, {"foo_rate": 1e-3})
+    with pytest.raises(TypeError, match="learnin_rate"):  # A misspelled setting.
+        optimization_settings({**optimization, "actor": {"learnin_rate": 1e-3, "grad_clip": 1.0}}, {})
 
 
 def test_context_range():

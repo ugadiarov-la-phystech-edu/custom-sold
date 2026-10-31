@@ -226,7 +226,7 @@ _PRESET_COMMON = [
                 "experiment=pick_red_4layers_savi8_finetune",
                 "environment@model.env=pick_red",
                 "model.finetune_autoencoder=True",
-                "model.autoencoder_learning_rate=0.00003",
+                "model.optimization.autoencoder.learning_rate=0.00003",
             ],
         ),
     ],

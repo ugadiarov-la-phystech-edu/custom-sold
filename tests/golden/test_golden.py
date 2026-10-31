@@ -55,6 +55,11 @@ def test_legacy_sold_checkpoint_resumes_training(tmp_path):
     trainer.fit(sold, ckpt_path=references.LEGACY_CHECKPOINT)
     assert sold.num_steps == num_steps + 10
     assert len(trainer.optimizers) == 5  # Fine-tuning adds the autoencoder's optimizer, restored from the checkpoint.
+    # Saved again, it is in the current format and loads.
+    trainer.save_checkpoint(tmp_path / "resaved.ckpt")
+    resaved = torch.load(tmp_path / "resaved.ckpt", map_location="cpu", weights_only=False)["hyper_parameters"]
+    assert "optimization" in resaved and "dynamics_learning_rate" not in resaved
+    assert references.load_sold(tmp_path / "resaved.ckpt", image_size=(16, 16), action_dim=2, max_episode_steps=8)
 
 
 def test_tiny_sold_losses():
