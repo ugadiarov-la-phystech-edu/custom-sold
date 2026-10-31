@@ -19,7 +19,7 @@ import rl.returns
 from utils.instantiate import instantiate_trainer
 from utils.module import FreezeParameters
 from utils.training import set_seed, print_summary, OnlineModule
-from utils.visualizations import visualize_reward_prediction, visualize_output_attention, visualize_reward_predictor_attention, get_attention_weights
+from utils.visualizations import dynamics_figure, imagination_figures, reward_figures
 
 
 @dataclass
@@ -30,6 +30,9 @@ class Imagination:
     predicted_values_dist: D.Distribution  # Critic's predictions, mean of shape (batch_size, horizon, 1).
     action_log_probs: torch.Tensor  # (batch_size, horizon)
     action_entropies: torch.Tensor  # (batch_size, horizon, 1)
+    imagined_slots: torch.Tensor  # Context and imagined slots (detached), (batch_size, num_context + horizon, ...)
+    num_context: int
+    predicted_rewards: torch.Tensor  # (batch_size, horizon)
 
 
 class SOLDModule(OnlineModule):
@@ -108,16 +111,13 @@ class SOLDModule(OnlineModule):
 
         # Without fine-tuning, the autoencoder forward pass needs no autograd graph.
         with torch.set_grad_enabled(self.finetune_autoencoder):
-            outputs = reconstruction_loss(self.autoencoder, images, actions)
+            reconstruction = reconstruction_loss(self.autoencoder, images, actions)
         if self.finetune_autoencoder:
-            self._optimize(autoencoder_optimizers[0], outputs["reconstruction_loss"], self.autoencoder_grad_clip)
-
-        if self.after_eval:
-            self.log("autoencoder_reconstruction", self.autoencoder.visualize_reconstruction(
-                {k: v[0] for k, v in outputs.items() if v.dim() > 0}))
+            self._optimize(autoencoder_optimizers[0], reconstruction["reconstruction_loss"], self.autoencoder_grad_clip)
 
         # Detach slots to prevent gradients from flowing back to the autoencoder model.
-        slots = outputs["slots"].detach()
+        slots = reconstruction["slots"].detach()
+        outputs = dict(reconstruction)
 
         # Learn to predict dynamics in slot-space.
         outputs |= self.compute_dynamics_loss(images, slots, actions)
@@ -143,12 +143,33 @@ class SOLDModule(OnlineModule):
                                             imagination.predicted_values_targ)
         self._optimize(critic_optimizer, outputs["critic_loss"], self.critic_grad_clip)
 
+        if self.after_eval:
+            self.log_visualizations(rewards, reconstruction, outputs, imagination)
+
         # Log all losses.
         for key, value in outputs.items():
             if key.endswith("_loss"):
                 self.log("train/" + key, value)
         self.log_gradients(model_names=("reward_predictor", "actor", "critic"))
         return outputs
+
+    @torch.no_grad()
+    def log_visualizations(self, rewards: torch.Tensor, reconstruction: Dict[str, Any], outputs: Dict[str, Any],
+                           imagination: Imagination) -> None:
+        """Log figures of the first sample of a training batch (after each evaluation).
+
+        reconstruction: the autoencoder's outputs; outputs: those of compute_dynamics_loss and compute_reward_loss.
+        Attention maps show the reward predictor and actor after this step's update.
+        """
+        self.log("autoencoder_reconstruction", self.autoencoder.visualize_reconstruction(
+            {k: v[0] for k, v in reconstruction.items() if v.dim() > 0}))
+        self.log("dynamics_prediction", dynamics_figure(self.autoencoder, reconstruction, outputs["num_context"],
+                                                        outputs["predicted_outputs"]))
+        figures = reward_figures(self.reward_predictor, reconstruction, rewards, outputs["predicted_rewards"])
+        figures |= imagination_figures(self.autoencoder, self.actor, imagination.imagined_slots,
+                                       imagination.num_context, imagination.predicted_rewards)
+        for name, image in figures.items():
+            self.log(name, image)
 
     def _optimize(self, optimizer, loss: torch.Tensor, grad_clip: float) -> None:
         """One gradient step on loss, with the gradient norm clipped to grad_clip."""
@@ -161,30 +182,16 @@ class SOLDModule(OnlineModule):
         self.dynamics_predictor.train()
         batch_size, sequence_length, num_slots, slot_dim = slots.size()
         num_context = torch.randint(self.min_num_context, self.max_num_context + 1, (1,)).item()
-        context_slots = slots[:, :num_context].detach()
 
         future_slots = self.dynamics_predictor.predict_slots(slots, actions[:, 1:].clone().detach(), steps=self.imagination_horizon, num_context=num_context)
         future_outputs = self.autoencoder.decode(future_slots)
         slot_loss = F.mse_loss(future_slots, slots[:, num_context:num_context + self.imagination_horizon])
         image_loss = F.mse_loss(future_outputs["reconstructions"], images[:, num_context:num_context + self.imagination_horizon])
 
-        if self.after_eval:
-            x_ticks = [f'T={0}']
-            for t in range(1, num_context + self.imagination_horizon):
-                x_ticks.append(f'{t}')
-
-            context_outputs = self.autoencoder.decode(context_slots)
-            context_outputs["images"] = images[:, :num_context]
-            context_outputs["xticks"] = np.array([x_ticks, ])[:, :num_context]
-            context_image = self.autoencoder.visualize_reconstruction({k: v[0] for k, v in context_outputs.items()})
-            future_outputs["images"] = images[:, num_context:num_context + self.imagination_horizon]
-            future_outputs["xticks"] = np.array([x_ticks, ])[:, num_context:]
-            future_image = self.autoencoder.visualize_reconstruction({k: v[0] for k, v in future_outputs.items()})
-            dynamics_image = torch.cat(
-                [context_image, torch.ones(3, context_image.size(1), 2), future_image], dim=2)
-            self.log("dynamics_prediction", dynamics_image)
-
-        return {"slot_loss": slot_loss, "image_loss": image_loss, "dynamics_loss": slot_loss + image_loss}
+        # For figures: the first sample's decoded predictions (the batch is freed after the update).
+        predicted_outputs = {k: v[:1].detach().clone() for k, v in future_outputs.items()}
+        return {"slot_loss": slot_loss, "image_loss": image_loss, "dynamics_loss": slot_loss + image_loss,
+                "num_context": num_context, "predicted_outputs": predicted_outputs}
 
     def compute_reward_loss(self, images: torch.Tensor, reconstructions: torch.Tensor, slots: torch.Tensor, rewards: torch.Tensor) -> Dict[str, Any]:
         is_firsts = torch.isnan(rewards)  # We add NaN as a reward on the first time-step.
@@ -192,25 +199,10 @@ class SOLDModule(OnlineModule):
         log_probs = predicted_rewards_dist.log_prob(torch.nan_to_num(rewards).unsqueeze(2))
         masked_log_probs = log_probs[~is_firsts]
 
-        # Log visualizations related to reward prediction.
-        if self.after_eval:
-            with torch.no_grad():
-                # Log prediction vs ground truth reward over the sequence.
-                reward_image = visualize_reward_prediction(
-                    images[0], reconstructions[0], rewards[0],
-                    predicted_rewards_dist.mean.squeeze(2)[0])
-                self.log("reward_prediction", reward_image)
-
-                # Log visualization of reward predictor attention to inspect reward-predictive elements.
-                outputs = self.autoencoder.decode(slots[0:1])
-                if "masks" in outputs:
-                    output_weights = get_attention_weights(self.reward_predictor, slots[0:1, ])
-                    attention_image = visualize_reward_predictor_attention(images[0], reconstructions[0], rewards[0], predicted_rewards_dist.mean.squeeze(2)[0], output_weights, outputs["rgbs"][0], outputs["masks"][0])
-                    self.log("reward_predictor_attention", attention_image)
-
+        predicted_rewards = predicted_rewards_dist.mean.squeeze(2).detach()
         # A metric: detached, converted to a number only when logged (no GPU sync).
-        return {"reward_loss": -masked_log_probs.mean(),
-                "reward_mse_loss": F.mse_loss(predicted_rewards_dist.mean.squeeze(2)[~is_firsts], rewards[~is_firsts]).detach()}
+        return {"reward_loss": -masked_log_probs.mean(), "predicted_rewards": predicted_rewards,
+                "reward_mse_loss": F.mse_loss(predicted_rewards[~is_firsts], rewards[~is_firsts])}
 
     def imagine_ahead(self, slots: torch.Tensor, actions: torch.Tensor) -> Imagination:
         self.dynamics_predictor.eval()
@@ -254,30 +246,8 @@ class SOLDModule(OnlineModule):
         predicted_values_targ = self.critic_target(slots_context[:, :-1], start=num_context - 1).mean.squeeze(-1)
         predicted_values_dist = self.critic(slots_context[:, :-1], start=num_context - 1)
 
-        if self.after_eval:
-            with torch.no_grad():
-                # Log visualization of a latent imagination sequence.
-                outputs = self.autoencoder.decode(slots_context[0:1])
-                x_ticks = [''] * num_context
-                x_ticks.append(f'rew={predicted_rewards[0, 0].item():.2f}')
-                for t in range(1, self.imagination_horizon):
-                    x_ticks.append(f'{predicted_rewards[0, t].item():.2f}')
-                outputs["xticks"] = np.array([x_ticks, ])
-                context_image = self.autoencoder.visualize_reconstruction(
-                    {k: v[0, :num_context] for k, v in outputs.items()})
-                future_image = self.autoencoder.visualize_reconstruction(
-                    {k: v[0, num_context:] for k, v in outputs.items()})
-                latent_imagination_image = torch.cat(
-                    [context_image, torch.ones(3, context_image.size(1), 2), future_image], dim=2)
-                self.log("latent_imagination", latent_imagination_image)
-
-                # Log visualization of actor attention.
-                if "masks" in outputs:
-                    output_weights = get_attention_weights(self.actor, slots_context[:1, :num_context + self.imagination_horizon])
-                    actor_attention_image = visualize_output_attention(output_weights, outputs["reconstructions"][0], outputs["rgbs"][0], outputs["masks"][0])
-                    self.log("actor_attention", actor_attention_image)
         return Imagination(lambda_returns, predicted_values_targ, predicted_values_dist, action_log_probs,
-                           action_entropies)
+                           action_entropies, slots_context, num_context, predicted_rewards.detach())
 
     def compute_actor_loss(self, lambda_returns: torch.Tensor, predicted_values_targ: torch.Tensor,
                            action_log_probs: torch.Tensor, action_entropies: torch.Tensor) -> Dict[str, Any]:

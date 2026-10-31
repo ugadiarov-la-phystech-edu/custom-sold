@@ -11,6 +11,7 @@ from modeling.distributions import TwoHotEncodingDistribution
 import rl.losses
 import rl.returns
 from tests import fakes
+from modeling.autoencoder.losses import reconstruction_loss
 from tests.conftest import make_online_trainer, make_tiny_sold
 
 
@@ -51,7 +52,6 @@ def _actor_loss(sold, imagination):
 
 def test_critic_target_is_not_trained_by_gradients(tiny_sold):
     assert not any(p.requires_grad for p in tiny_sold.critic_target.parameters())
-    tiny_sold.after_eval = False
     images, actions, _ = _batch(tiny_sold)
     slots = tiny_sold.autoencoder(images, actions[:, 1:])["slots"].detach()
     imagination = tiny_sold.imagine_ahead(slots, actions)
@@ -61,7 +61,6 @@ def test_critic_target_is_not_trained_by_gradients(tiny_sold):
 
 
 def test_imagine_ahead_with_batch_size_one(tiny_sold):
-    tiny_sold.after_eval = False
     images, actions, _ = _batch(tiny_sold, batch_size=1)
     slots = tiny_sold.autoencoder(images, actions[:, 1:])["slots"].detach()
     imagination = tiny_sold.imagine_ahead(slots, actions)
@@ -116,7 +115,6 @@ def test_compute_critic_loss_uses_the_configured_regularization_weight(overrides
 def test_compute_dynamics_loss(tiny_sold):
     images, actions, _ = _batch(tiny_sold)
     slots = tiny_sold.autoencoder(images, actions[:, 1:])["slots"].detach()
-    tiny_sold.after_eval = False
     losses = tiny_sold.compute_dynamics_loss(images, slots, actions)
     assert torch.allclose(losses["dynamics_loss"], losses["slot_loss"] + losses["image_loss"])
     assert tiny_sold.dynamics_predictor.training
@@ -125,7 +123,6 @@ def test_compute_dynamics_loss(tiny_sold):
 def test_compute_reward_loss_ignores_first_step(tiny_sold):
     images, actions, rewards = _batch(tiny_sold)
     outputs = tiny_sold.autoencoder(images, actions[:, 1:])
-    tiny_sold.after_eval = False
     losses = tiny_sold.compute_reward_loss(images, outputs["reconstructions"], outputs["slots"], rewards)
     assert torch.isfinite(losses["reward_loss"]) and losses["reward_mse_loss"].dim() == 0
     assert not losses["reward_mse_loss"].requires_grad
@@ -134,7 +131,6 @@ def test_compute_reward_loss_ignores_first_step(tiny_sold):
 @pytest.mark.parametrize("from_every", [False, True])
 def test_imagine_ahead_shapes(from_every):
     sold = make_tiny_sold(start_imagination_from_every=from_every)
-    sold.after_eval = False
     images, actions, _ = _batch(sold)
     slots = sold.autoencoder(images, actions[:, 1:])["slots"].detach()
     imagination = sold.imagine_ahead(slots, actions)
@@ -151,36 +147,51 @@ def test_imagine_ahead_shapes(from_every):
     assert all(p.grad is None for p in sold.critic.parameters())
 
 
-def test_visualizations_after_evaluation(tiny_sold, monkeypatch):
+def _log_visualizations(sold):
+    """Compute one batch's losses as training_step does and log the figures; returns the logged names."""
     recorder = LogRecorder()
-    monkeypatch.setattr(tiny_sold, "log", recorder)
-    tiny_sold.after_eval = True
-    images, actions, rewards = _batch(tiny_sold)
-    outputs = tiny_sold.autoencoder(images, actions[:, 1:])
-    slots = outputs["slots"].detach()
-    tiny_sold.compute_dynamics_loss(images, slots, actions)
-    tiny_sold.compute_reward_loss(images, outputs["reconstructions"], slots, rewards)
-    tiny_sold.imagine_ahead(slots, actions)
-    assert recorder.names == ["dynamics_prediction", "reward_prediction", "reward_predictor_attention",
-                              "latent_imagination", "actor_attention"]
+    sold.log = recorder
+    images, actions, rewards = _batch(sold)
+    reconstruction = reconstruction_loss(sold.autoencoder, images, actions)
+    slots = reconstruction["slots"].detach()
+    outputs = sold.compute_dynamics_loss(images, slots, actions)
+    outputs |= sold.compute_reward_loss(images, reconstruction["reconstructions"], slots, rewards)
+    assert recorder.names == [], "the loss functions only compute"
+    sold.log_visualizations(rewards, reconstruction, outputs, sold.imagine_ahead(slots, actions))
+    return recorder.names
 
 
-def test_visualizations_without_slot_masks(monkeypatch):
+def test_visualizations_after_evaluation(tiny_sold):
+    assert _log_visualizations(tiny_sold) == ["autoencoder_reconstruction", "dynamics_prediction", "reward_prediction",
+                                              "reward_predictor_attention", "latent_imagination", "actor_attention"]
+
+
+def test_visualizations_without_slot_masks():
     import functools
     from modeling.autoencoder.cnn import CnnDecoder, CnnEncoder
     from modeling.autoencoder.cnn.autoencoder import Cnn
+
     autoencoder = Cnn(CnnEncoder([4, 4], [3, 3], [2, 2]),
                       functools.partial(CnnDecoder, image_size=(16, 16), num_channels=[4, 4], kernel_sizes=[3, 3],
                                         strides=[2, 2]))
-    sold = make_tiny_sold(autoencoder=autoencoder)
-    recorder = LogRecorder()
-    monkeypatch.setattr(sold, "log", recorder)
-    sold.after_eval = True
-    images, actions, rewards = _batch(sold)
-    outputs = sold.autoencoder(images, actions[:, 1:])
-    sold.compute_reward_loss(images, outputs["reconstructions"], outputs["slots"], rewards)
-    sold.imagine_ahead(outputs["slots"], actions)
-    assert recorder.names == ["reward_prediction", "latent_imagination"]  # No attention images without masks.
+    names = _log_visualizations(make_tiny_sold(autoencoder=autoencoder))
+    # No attention figures without slot masks.
+    assert names == ["autoencoder_reconstruction", "dynamics_prediction", "reward_prediction", "latent_imagination"]
+
+
+def test_training_step_logs_figures_only_after_evaluation(tiny_sold, monkeypatch):
+    calls = []
+    monkeypatch.setattr(tiny_sold, "log_visualizations", lambda *args: calls.append(args))
+    monkeypatch.setattr(tiny_sold, "log", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tiny_sold, "log_gradients", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tiny_sold, "_optimize", lambda *args: None)
+    monkeypatch.setattr(tiny_sold, "optimizers", lambda: [None] * 4)
+    images, actions, rewards = _batch(tiny_sold)
+    batch = {"obs": (images * 255).unsqueeze(0), "action": actions.unsqueeze(0), "reward": rewards.unsqueeze(0)}
+    for after_eval in [False, True]:
+        tiny_sold.after_eval = after_eval
+        tiny_sold.training_step(batch, 0)
+    assert len(calls) == 1
 
 
 def test_select_action_modes(tiny_sold):
@@ -211,7 +222,6 @@ def test_select_action_clamps_with_first_dimension_bounds():
 @pytest.mark.xfail(strict=True, reason="BUGS_AND_PITFALLS.md #26: the entropy bonus ignores per-step discounts")
 def test_entropy_bonus_uses_the_discount_of_its_own_step():
     sold = make_tiny_sold()
-    sold.after_eval = False
     images = torch.rand(2, sold.sequence_length, 3, 16, 16)
     actions = torch.rand(2, sold.sequence_length, 2)
     slots = sold.autoencoder(images, actions[:, 1:])["slots"].detach()
@@ -227,7 +237,6 @@ def test_entropy_bonus_uses_the_discount_of_its_own_step():
 @pytest.mark.xfail(strict=True, reason="BUGS_AND_PITFALLS.md #29: imagined actions are not limited to the action space")
 def test_imagined_actions_stay_within_the_action_space():
     sold = make_tiny_sold()
-    sold.after_eval = False
     with torch.no_grad():
         sold.actor.mlp[-1].bias[2:].fill_(10.0)  # Maximal standard deviation (1.0), as early in training.
     images = torch.rand(4, sold.sequence_length, 3, 16, 16)

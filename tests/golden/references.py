@@ -96,7 +96,6 @@ def tiny_sold_losses():
     from tests.conftest import make_tiny_sold
     torch.manual_seed(0)
     sold = make_tiny_sold()
-    sold.after_eval = False
     generator = torch.Generator().manual_seed(2)
     images = torch.rand(2, sold.sequence_length, 3, 16, 16, generator=generator)
     actions = torch.rand(2, sold.sequence_length, 2, generator=generator) * 2 - 1
@@ -113,7 +112,7 @@ def tiny_sold_losses():
                                       imagination.action_log_probs, imagination.action_entropies)
     losses |= sold.compute_critic_loss(imagination.predicted_values_dist, imagination.lambda_returns,
                                        imagination.predicted_values_targ)
-    return {key: torch.as_tensor(value).detach() for key, value in losses.items()}
+    return {key: torch.as_tensor(value).detach() for key, value in losses.items() if key.endswith("_loss")}
 
 
 def tiny_sold_training():

@@ -230,20 +230,16 @@ def test_get_attention_weights_on_a_predictor():
     weights = vis.get_attention_weights(model, torch.randn(1, 3, 2, 4))
     assert weights.shape == (3, 2)
     assert weights.max().item() == pytest.approx(1.0)
-    assert all(not m._forward_hooks for m in model.modules())
 
 
-def test_attention_weights_hook_without_outputs():
-    hook = vis.AttentionWeightsHook()
-    hook(None, None, (None, torch.ones(1)))
-    hook.clear()
-    assert hook.outputs == [] and hook.compute_attention_weights("cpu", 2, 3) == 0
-
-    class NoAttention(torch.nn.Module):
-        def forward(self, slots, start=0):
-            return slots
-
-    assert vis.get_attention_weights(NoAttention(), torch.randn(1, 2, 2, 4)) == 0
+def test_get_attention_weights_matches_a_manual_rollout():
+    model = _predictor()
+    slots = torch.randn(1, 3, 2, 4)
+    _, layer_weights = model.slot_aggregation_transformer.forward_with_attention(slots, start=2)
+    eye = torch.eye(layer_weights[0].size(-1))
+    first, second = [(w[0] + eye) / (w[0] + eye).sum(-1, keepdim=True) for w in layer_weights]
+    output_row = (second @ first)[-1].view(3, -1)[:, :2]  # Output token of the last step; slots of each step.
+    assert torch.allclose(vis.get_attention_weights(model, slots), output_row / output_row.max(), atol=1e-6)
 
 
 def test_attention_visualizations():

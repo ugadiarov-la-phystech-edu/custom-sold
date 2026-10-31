@@ -101,6 +101,18 @@ def test_slot_aggregation_transformer_output_and_start():
     assert torch.allclose(model(slots, start=4)[:, 0], model(slots)[:, -1], atol=1e-5)
 
 
+def test_slot_aggregation_transformer_returns_attention_on_request():
+    model = _transformer()
+    slots = torch.randn(1, 3, 2, 4)
+    outputs, weights = model.forward_with_attention(slots, start=1)
+    # Returning the weights uses PyTorch's non-fused attention kernel: outputs match to float precision.
+    assert torch.allclose(outputs, model(slots, start=1), atol=1e-5)
+    num_tokens = 3 * model.attention_mask.step_size
+    assert len(weights) == len(model.transformer_encoder_blocks)
+    assert all(w.shape == (1, num_tokens, num_tokens) for w in weights)
+    assert all(torch.allclose(w.sum(-1), torch.ones(1, num_tokens)) for w in weights)  # Rows are distributions.
+
+
 def test_slot_aggregation_transformer_builds_the_mask_once_per_forward():
     model = _transformer()
     calls = []
