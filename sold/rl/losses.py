@@ -44,4 +44,5 @@ def critic_loss(predicted_values_dist: D.Distribution, lambda_returns: torch.Ten
     return {"critic_loss": return_loss + regularization_weight * target_regularization_loss,
             "critic_return_loss": return_loss,
             "critic_target_regularization_loss": regularization_weight * target_regularization_loss,
-            "return_mse_loss": F.mse_loss(predicted_values_dist.mean.squeeze(2), lambda_returns).item()}
+            # A metric: detached, converted to a number only when logged (no GPU sync).
+            "return_mse_loss": F.mse_loss(predicted_values_dist.mean.squeeze(2), lambda_returns).detach()}

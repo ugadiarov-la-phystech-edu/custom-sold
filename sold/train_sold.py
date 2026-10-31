@@ -103,20 +103,14 @@ class SOLDModule(OnlineModule):
         return optimizers
 
     def training_step(self, batch, batch_index: int) -> STEP_OUTPUT:
-        dynamics_optimizer, reward_optimizer, actor_optimizer, critic_optimizer, *autoencoder_optimizer = self.optimizers()
+        dynamics_optimizer, reward_optimizer, actor_optimizer, critic_optimizer, *autoencoder_optimizers = self.optimizers()
         images, actions, rewards = batch["obs"].squeeze(0) / 255., batch["action"].squeeze(0), batch["reward"].squeeze(0)
 
-        if self.finetune_autoencoder:
-            autoencoder_optimizer = autoencoder_optimizer[0]
-            autoencoder_optimizer.zero_grad()
         # Without fine-tuning, the autoencoder forward pass needs no autograd graph.
         with torch.set_grad_enabled(self.finetune_autoencoder):
             outputs = reconstruction_loss(self.autoencoder, images, actions)
         if self.finetune_autoencoder:
-            self.manual_backward(outputs["reconstruction_loss"])
-            self.clip_gradients(autoencoder_optimizer, gradient_clip_val=self.autoencoder_grad_clip,
-                                gradient_clip_algorithm="norm")
-            autoencoder_optimizer.step()
+            self._optimize(autoencoder_optimizers[0], outputs["reconstruction_loss"], self.autoencoder_grad_clip)
 
         if self.after_eval:
             self.log("autoencoder_reconstruction", self.autoencoder.visualize_reconstruction(
@@ -126,18 +120,12 @@ class SOLDModule(OnlineModule):
         slots = outputs["slots"].detach()
 
         # Learn to predict dynamics in slot-space.
-        dynamics_optimizer.zero_grad()
         outputs |= self.compute_dynamics_loss(images, slots, actions)
-        self.manual_backward(outputs["dynamics_loss"])
-        self.clip_gradients(dynamics_optimizer, gradient_clip_val=self.dynamics_grad_clip, gradient_clip_algorithm="norm")
-        dynamics_optimizer.step()
+        self._optimize(dynamics_optimizer, outputs["dynamics_loss"], self.dynamics_grad_clip)
 
         # Learn to predict rewards from the slot representation.
-        reward_optimizer.zero_grad()
         outputs |= self.compute_reward_loss(images, outputs["reconstructions"], slots, rewards)
-        self.manual_backward(outputs["reward_loss"])
-        self.clip_gradients(reward_optimizer, gradient_clip_val=self.reward_grad_clip, gradient_clip_algorithm="norm")
-        reward_optimizer.step()
+        self._optimize(reward_optimizer, outputs["reward_loss"], self.reward_grad_clip)
 
         # Update the target critic network.
         rl.returns.ema_update(self.critic_target, self.critic, self.critic_ema_decay)
@@ -146,20 +134,14 @@ class SOLDModule(OnlineModule):
         imagination = self.imagine_ahead(slots, actions)
 
         # Learn the actor.
-        actor_optimizer.zero_grad()
         outputs |= self.compute_actor_loss(imagination.lambda_returns, imagination.predicted_values_targ,
                                            imagination.action_log_probs, imagination.action_entropies)
-        self.manual_backward(outputs["actor_loss"])
-        self.clip_gradients(actor_optimizer, gradient_clip_val=self.actor_grad_clip, gradient_clip_algorithm="norm")
-        actor_optimizer.step()
+        self._optimize(actor_optimizer, outputs["actor_loss"], self.actor_grad_clip)
 
         # Learn the critic.
-        critic_optimizer.zero_grad()
         outputs |= self.compute_critic_loss(imagination.predicted_values_dist, imagination.lambda_returns,
                                             imagination.predicted_values_targ)
-        self.manual_backward(outputs["critic_loss"])
-        self.clip_gradients(critic_optimizer, gradient_clip_val=self.critic_grad_clip, gradient_clip_algorithm="norm")
-        critic_optimizer.step()
+        self._optimize(critic_optimizer, outputs["critic_loss"], self.critic_grad_clip)
 
         # Log all losses.
         for key, value in outputs.items():
@@ -167,6 +149,13 @@ class SOLDModule(OnlineModule):
                 self.log("train/" + key, value)
         self.log_gradients(model_names=("reward_predictor", "actor", "critic"))
         return outputs
+
+    def _optimize(self, optimizer, loss: torch.Tensor, grad_clip: float) -> None:
+        """One gradient step on loss, with the gradient norm clipped to grad_clip."""
+        optimizer.zero_grad()
+        self.manual_backward(loss)
+        self.clip_gradients(optimizer, gradient_clip_val=grad_clip, gradient_clip_algorithm="norm")
+        optimizer.step()
 
     def compute_dynamics_loss(self, images: torch.Tensor, slots: torch.Tensor, actions: torch.Tensor) -> Dict[str, Any]:
         self.dynamics_predictor.train()
@@ -219,8 +208,9 @@ class SOLDModule(OnlineModule):
                     attention_image = visualize_reward_predictor_attention(images[0], reconstructions[0], rewards[0], predicted_rewards_dist.mean.squeeze(2)[0], output_weights, outputs["rgbs"][0], outputs["masks"][0])
                     self.log("reward_predictor_attention", attention_image)
 
+        # A metric: detached, converted to a number only when logged (no GPU sync).
         return {"reward_loss": -masked_log_probs.mean(),
-                "reward_mse_loss": F.mse_loss(predicted_rewards_dist.mean.squeeze(2)[~is_firsts], rewards[~is_firsts]).item()}
+                "reward_mse_loss": F.mse_loss(predicted_rewards_dist.mean.squeeze(2)[~is_firsts], rewards[~is_firsts]).detach()}
 
     def imagine_ahead(self, slots: torch.Tensor, actions: torch.Tensor) -> Imagination:
         self.dynamics_predictor.eval()

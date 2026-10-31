@@ -127,7 +127,8 @@ def test_compute_reward_loss_ignores_first_step(tiny_sold):
     outputs = tiny_sold.autoencoder(images, actions[:, 1:])
     tiny_sold.after_eval = False
     losses = tiny_sold.compute_reward_loss(images, outputs["reconstructions"], outputs["slots"], rewards)
-    assert torch.isfinite(losses["reward_loss"]) and isinstance(losses["reward_mse_loss"], float)
+    assert torch.isfinite(losses["reward_loss"]) and losses["reward_mse_loss"].dim() == 0
+    assert not losses["reward_mse_loss"].requires_grad
 
 
 @pytest.mark.parametrize("from_every", [False, True])

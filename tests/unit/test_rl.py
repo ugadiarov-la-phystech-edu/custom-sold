@@ -87,7 +87,7 @@ def test_actor_loss_rejects_unknown_gradients():
 
 
 def test_critic_loss():
-    dist = TwoHotEncodingDistribution(torch.randn(2, 3, 255), dims=1)
+    dist = TwoHotEncodingDistribution(torch.randn(2, 3, 255, requires_grad=True), dims=1)
     returns, targets, discounts = torch.randn(2, 3), torch.randn(2, 3), torch.tensor([[1.0, 0.5, 0.25]])
     losses = critic_loss(dist, returns, targets, discounts, regularization_weight=0.5)
     expected_return = torch.mean(discounts * -dist.log_prob(returns.unsqueeze(2)))
@@ -95,5 +95,6 @@ def test_critic_loss():
     assert torch.allclose(losses["critic_return_loss"], expected_return)
     assert torch.allclose(losses["critic_target_regularization_loss"], 0.5 * expected_regularization)
     assert torch.allclose(losses["critic_loss"], expected_return + 0.5 * expected_regularization)
-    assert losses["return_mse_loss"] == pytest.approx(torch.mean((dist.mean.squeeze(2) - returns) ** 2).item())
+    assert torch.allclose(losses["return_mse_loss"], torch.mean((dist.mean.squeeze(2) - returns) ** 2))
+    assert not losses["return_mse_loss"].requires_grad
 
