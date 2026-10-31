@@ -1,7 +1,7 @@
 import torch
 import torch.distributions as D
 import torch.nn.functional as F
-from typing import Any, Dict
+from typing import Any
 
 
 def actor_loss(
@@ -14,7 +14,7 @@ def actor_loss(
     invscale: torch.Tensor,
     gradients: str,
     entropy_weight: float,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Actor loss on normalized advantages, with an entropy bonus.
 
     lambda_returns, predicted_values_targ (target critic) and action_log_probs: (batch_size, horizon); action_entropies:
@@ -46,7 +46,7 @@ def critic_loss(
     predicted_values_targ: torch.Tensor,
     discounts: torch.Tensor,
     regularization_weight: float,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Negative log-likelihood of the λ-returns, regularized towards the target critic's values.
 
     predicted_values_dist's mean: (batch_size, horizon, 1); lambda_returns and predicted_values_targ: (batch_size,

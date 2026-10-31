@@ -12,7 +12,7 @@ from PIL import Image
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 
 class ImageDataset(Dataset):
@@ -33,7 +33,7 @@ class ImageDataset(Dataset):
         self.episode_dir_names.sort()
 
     @property
-    def dataset_infos(self) -> Dict[str, Any]:
+    def dataset_infos(self) -> dict[str, Any]:
         if not hasattr(self, "image_size") or not hasattr(self, "action_dim"):
             image_sequence, actions = self[0]
             self.image_size = list(image_sequence[0].shape[1:])
@@ -43,7 +43,7 @@ class ImageDataset(Dataset):
     def __len__(self) -> int:
         return len(self.episode_dir_names)
 
-    def _load_npz_data(self, index: int) -> List[np.array]:
+    def _load_npz_data(self, index: int) -> list[np.array]:
         episode_dir = os.path.join(self.split_path, str(self.episode_dir_names[index]))
         episode_data = np.load(os.path.join(episode_dir, "episode.npz"))
         return [episode_data.get(key, None) for key in ["images", "actions", "rewards"]]
@@ -71,7 +71,7 @@ class PNGDataset(ImageDataset):
             png_paths.sort(key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
             self.episode_png_paths.append(png_paths)
 
-    def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
         _, actions, rewards = self._load_npz_data(index)
         actions = self._actions_leading_to_frames(actions)
         png_paths = self.episode_png_paths[index]
@@ -91,7 +91,7 @@ class NPZDataset(ImageDataset):
     def __init__(self, path: str, data_dir: str, split: str, sequence_length: int) -> None:
         super().__init__(path, data_dir, split, sequence_length)
 
-    def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
         images, actions, rewards = self._load_npz_data(index)
         actions = self._actions_leading_to_frames(actions)
         start_index = self._random_start(len(images))

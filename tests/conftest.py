@@ -5,18 +5,16 @@ import os
 os.environ.setdefault("HYDRA_FULL_ERROR", "1")
 
 import functools
-import random
-from pathlib import Path
-
 import matplotlib
+from pathlib import Path
+import random
 
 matplotlib.use("Agg")
 
 import numpy as np
 import pytest
-import torch
-
 from tests import fakes  # noqa: F401  (registers FakePixel-v0)
+import torch
 
 REPO_DIR = Path(__file__).resolve().parents[1]
 SOLD_DIR = REPO_DIR / "sold"

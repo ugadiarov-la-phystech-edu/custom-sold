@@ -1,14 +1,7 @@
 """modeling/autoencoder: base class, CNN autoencoder, SAVi and its parts, logging callbacks."""
 
 import functools
-import os
-from unittest import mock
-
 import hydra
-import pytest
-import torch
-from omegaconf import OmegaConf
-
 from modeling.autoencoder.base import Autoencoder
 from modeling.autoencoder.cnn import CnnDecoder, CnnEncoder
 from modeling.autoencoder.cnn.autoencoder import Cnn, get_embedding_dim
@@ -26,7 +19,12 @@ from modeling.autoencoder.savi.predictor import (
     TransformerPredictor,
     init_xavier_,
 )
+from omegaconf import OmegaConf
+import os
+import pytest
 from tests.conftest import CONFIGS_DIR, make_tiny_savi
+import torch
+from unittest import mock
 
 
 # ----------------------------------------------------------------------------------- CNN parts

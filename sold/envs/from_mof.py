@@ -1,8 +1,8 @@
+from collections.abc import Callable
+from envs.from_gym import make_env as make_gym_env
 import gym
 import numpy as np
 import random
-from envs.from_gym import make_env as make_gym_env
-from typing import Callable, Dict, List, Optional, Tuple
 
 
 class VariableDistractorsWrapper(gym.Wrapper):
@@ -12,10 +12,10 @@ class VariableDistractorsWrapper(gym.Wrapper):
     simulation on every reset.
     """
 
-    def __init__(self, env_names: List[str], make_env: Callable[[str], gym.Env]) -> None:
+    def __init__(self, env_names: list[str], make_env: Callable[[str], gym.Env]) -> None:
         self.env_names = env_names
         self.make_env = make_env
-        self.envs: Dict[str, gym.Env] = {}
+        self.envs: dict[str, gym.Env] = {}
         super().__init__(self._get_env(random.choice(self.env_names)))
 
     def _get_env(self, name: str) -> gym.Env:
@@ -33,7 +33,7 @@ class VariableDistractorsWrapper(gym.Wrapper):
 
 
 def make_env(
-    name: str, image_size: Tuple[int, int], max_episode_steps: int, action_repeat: int, seed: Optional[int] = None
+    name: str, image_size: tuple[int, int], max_episode_steps: int, action_repeat: int, seed: int | None = None
 ):
     # Register MOF environments and parse the number of distractors.
     import multi_object_fetch  # noqa: F401  (registers the environments with gym)

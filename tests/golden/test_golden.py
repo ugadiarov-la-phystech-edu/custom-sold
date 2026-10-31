@@ -1,10 +1,9 @@
 """Compare outputs of the released checkpoints and of SOLD's losses with stored references (see references.py)."""
 
 import pytest
-import torch
-
 from tests.conftest import make_online_trainer, require_checkpoint
 from tests.golden import references
+import torch
 
 TOLERANCE = dict(rtol=1e-4, atol=1e-5)
 

@@ -1,22 +1,20 @@
 """Functions in the entry-point scripts: train_autoencoder, generate_dataset and evaluate_sold."""
 
 import ast
+import evaluate_sold
 import functools
-import os
-import subprocess
-import sys
-
-import numpy as np
-import pytest
-import torch
+import generate_dataset
 from hydra import compose, initialize_config_dir
 from lightning import Trainer
+import numpy as np
 from omegaconf import OmegaConf
-from torch.utils.data import DataLoader, TensorDataset
-
-import evaluate_sold
-import generate_dataset
+import os
+import pytest
+import subprocess
+import sys
 from tests.conftest import CONFIGS_DIR, REPO_DIR, SOLD_DIR, make_tiny_savi, make_tiny_sold
+import torch
+from torch.utils.data import DataLoader, TensorDataset
 from train_autoencoder import AutoencoderModule, load_autoencoder
 
 

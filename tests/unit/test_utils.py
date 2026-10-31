@@ -2,22 +2,20 @@
 
 import json
 import math
+import numpy as np
+from omegaconf import OmegaConf
 import os
 from pathlib import Path
-import sys
-from unittest import mock
-
-import numpy as np
 import pytest
+import sys
+from tests.conftest import write_image_dataset
 import torch
-from omegaconf import OmegaConf
-
+from unittest import mock
 from utils import visualizations as vis
 from utils.instantiate import fill_in_missing, instantiate_dataloaders, instantiate_many, instantiate_trainer
 from utils.logging import ExtendedTensorBoardLogger, LoggingStepMixin
 from utils.module import FreezeParameters
 from utils.schedulers import LinearWarmupCosineAnnealingLR
-from tests.conftest import write_image_dataset
 
 
 # ----------------------------------------------------------------------------------- module

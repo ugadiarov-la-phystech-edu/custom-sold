@@ -1,8 +1,7 @@
 import gymnasium as gym
+import tensordict
 import torch
 from torchvision import transforms
-from typing import Tuple
-import tensordict
 
 
 def TransformObservation(obs: dict):
@@ -16,10 +15,10 @@ def TransformObservation(obs: dict):
 
 
 class ToTensorDict(gym.Wrapper):
-    def step(self, action: torch.Tensor) -> Tuple[tensordict.TensorDict, float, bool, bool, dict]:
+    def step(self, action: torch.Tensor) -> tuple[tensordict.TensorDict, float, bool, bool, dict]:
         obs, reward, terminated, truncated, info = self.env.step(action.detach().cpu().numpy())
         return TransformObservation(obs).copy(), reward, terminated, truncated, info
 
-    def reset(self) -> Tuple[tensordict.TensorDict, dict]:
+    def reset(self) -> tuple[tensordict.TensorDict, dict]:
         obs, info = self.env.reset()
         return TransformObservation(obs), info

@@ -1,18 +1,16 @@
 """train_sold.SOLDModule: construction, losses, imagination and action selection."""
 
 import copy
-from pathlib import Path
-
-import numpy as np
-import pytest
-import torch
-
+from modeling.autoencoder.losses import reconstruction_loss
 from modeling.distributions import TwoHotEncodingDistribution
+import numpy as np
+from pathlib import Path
+import pytest
 import rl.losses
 import rl.returns
 from tests import fakes
-from modeling.autoencoder.losses import reconstruction_loss
 from tests.conftest import make_online_trainer, make_tiny_sold
+import torch
 
 
 class LogRecorder:

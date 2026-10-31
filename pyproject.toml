@@ -45,8 +45,15 @@ line-length = 120
 target-version = "py311"
 
 [tool.ruff.lint]
-# Ruff's default rule set: pyflakes and pycodestyle errors.
-select = ["E4", "E7", "E9", "F"]
+# Defaults (pyflakes, pycodestyle errors), line length, warnings, isort, bugbear, pyupgrade.
+select = ["E4", "E7", "E9", "E501", "F", "W", "I", "B", "UP"]
+# zip(strict=True) would turn silent length mismatches into errors, a behavior change.
+ignore = ["B905"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Re-exports.
+
+[tool.ruff.lint.isort]
+# One alphabetical block, like the original code.
+no-sections = true
+force-sort-within-sections = true

@@ -1,18 +1,16 @@
 """utils/training.py: seeding, summary, the online progress bar and the OnlineModule collection loop."""
 
 import json
+import numpy as np
 import os
-import random
 from pathlib import Path
+import pytest
+import random
+from tests import fakes
+from tests.conftest import add_episode, make_episode, make_online_trainer, make_tiny_sold
+import torch
 from types import SimpleNamespace
 from unittest import mock
-
-import numpy as np
-import pytest
-import torch
-
-from tests.conftest import add_episode, make_episode, make_online_trainer, make_tiny_sold
-from tests import fakes
 from utils import training
 from utils.episode_runner import EpisodeRunner
 from utils.training import OnlineProgressBar, print_summary, set_seed

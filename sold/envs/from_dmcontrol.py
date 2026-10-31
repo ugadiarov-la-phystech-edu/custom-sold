@@ -1,13 +1,13 @@
 from collections import defaultdict
-import dm_env
 from dm_control import suite
 from dm_control.suite.wrappers import action_scale
+import dm_env
 from dm_env import StepType, specs
 from envs.wrappers.pixels import Pixels
 from envs.wrappers.time_limit import TimeLimit
 import gym
 import numpy as np
-from typing import Tuple, Any, NamedTuple
+from typing import Any, NamedTuple
 
 
 class ExtendedTimeStep(NamedTuple):
@@ -35,7 +35,7 @@ class ActionRepeatWrapper(dm_env.Environment):
     def step(self, action):
         reward = 0.0
         discount = 1.0
-        for i in range(self._num_repeats):
+        for _ in range(self._num_repeats):
             time_step = self._env.step(action)
             reward += (time_step.reward or 0.0) * discount
             discount *= time_step.discount
@@ -172,13 +172,13 @@ class TimeStepToGymWrapper:
             defaultdict(float),
         )
 
-    def render(self, mode="rgb_array", size: Tuple[int, int] = (384, 384), camera_id=0):
+    def render(self, mode="rgb_array", size: tuple[int, int] = (384, 384), camera_id=0):
         height, width = size
         camera_id = dict(quadruped=2).get(self.domain, camera_id)
         return self.env.physics.render(height, width, camera_id)
 
 
-def make_env(name: str, image_size: Tuple[int, int], max_episode_steps: int, action_repeat: int, seed: int = 0):
+def make_env(name: str, image_size: tuple[int, int], max_episode_steps: int, action_repeat: int, seed: int = 0):
     domain, task = name.replace("-", "_").split("_", 1)
     domain = dict(cup="ball_in_cup", pointmass="point_mass").get(domain, domain)
 

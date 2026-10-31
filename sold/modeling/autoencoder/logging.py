@@ -2,11 +2,11 @@ from lightning import LightningModule, Trainer
 from lightning.pytorch.callbacks import Callback
 import os
 import torch
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 
 class LoggingCallback(Callback):
-    def __init__(self, every_n_epochs: int = 1, save_dir: Optional[str] = None) -> None:
+    def __init__(self, every_n_epochs: int = 1, save_dir: str | None = None) -> None:
         super().__init__()
         self.every_n_epochs = every_n_epochs
         self.save_dir = save_dir
@@ -23,7 +23,7 @@ class LoggingCallback(Callback):
 
 
 class LogReconstruction(LoggingCallback):
-    def __init__(self, every_n_epochs: int = 1, save_dir: Optional[str] = None) -> None:
+    def __init__(self, every_n_epochs: int = 1, save_dir: str | None = None) -> None:
         super().__init__(every_n_epochs, save_dir)
         self.batch_index = 0
 
@@ -31,8 +31,8 @@ class LogReconstruction(LoggingCallback):
         self,
         trainer: Trainer,
         pl_module: LightningModule,
-        outputs: Dict[str, Any],
-        batch: Tuple[torch.Tensor, torch.Tensor],
+        outputs: dict[str, Any],
+        batch: tuple[torch.Tensor, torch.Tensor],
         batch_index: int,
     ) -> None:
         if self.should_log(pl_module):

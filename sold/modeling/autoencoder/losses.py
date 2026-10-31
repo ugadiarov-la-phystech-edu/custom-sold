@@ -1,10 +1,10 @@
 from modeling.autoencoder.base import Autoencoder
 import torch
 import torch.nn.functional as F
-from typing import Any, Dict
+from typing import Any
 
 
-def reconstruction_loss(autoencoder: Autoencoder, images: torch.Tensor, actions: torch.Tensor) -> Dict[str, Any]:
+def reconstruction_loss(autoencoder: Autoencoder, images: torch.Tensor, actions: torch.Tensor) -> dict[str, Any]:
     """The autoencoder's outputs for an image sequence, plus "reconstruction_loss" and the input "images".
 
     images: (batch_size, sequence_length, 3, height, width); actions: (batch_size, sequence_length, action_dim), where

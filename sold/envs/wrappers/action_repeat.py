@@ -1,6 +1,5 @@
 import gym
 import numpy as np
-from typing import Tuple
 
 
 class ActionRepeat(gym.Wrapper):
@@ -8,7 +7,7 @@ class ActionRepeat(gym.Wrapper):
         super().__init__(env)
         self.action_repeat = action_repeat
 
-    def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, dict]:
+    def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, dict]:
         accumulated_reward = 0.0
         for _ in range(self.action_repeat):
             obs, reward, done, info = self.env.step(action)

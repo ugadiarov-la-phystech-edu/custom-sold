@@ -2,10 +2,10 @@ import hydra
 from lightning.pytorch import Trainer
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 
-def instantiate_dataloaders(cfg: DictConfig) -> Tuple:
+def instantiate_dataloaders(cfg: DictConfig) -> tuple:
     datasets = [hydra.utils.instantiate(cfg, split=split) for split in ["train", "val"]]
     dataloaders = [
         DataLoader(dataset, batch_size=cfg.batch_size, shuffle=(dataset.split == "train"), num_workers=cfg.num_workers)
@@ -14,7 +14,7 @@ def instantiate_dataloaders(cfg: DictConfig) -> Tuple:
     return *dataloaders, datasets[0].dataset_infos
 
 
-def instantiate_many(cfg: DictConfig) -> List:
+def instantiate_many(cfg: DictConfig) -> list:
     instantiated_objects = []
     for _, conf in cfg.items():
         if isinstance(conf, DictConfig) and "_target_" in conf:
@@ -28,7 +28,7 @@ def instantiate_trainer(cfg: DictConfig) -> Trainer:
     )
 
 
-def fill_in_missing(cfg: DictConfig, infos: Dict[str, Any]):
+def fill_in_missing(cfg: DictConfig, infos: dict[str, Any]):
     missing_keys = OmegaConf.missing_keys(cfg)
     for key, value in infos.items():
         for missing_key in missing_keys:

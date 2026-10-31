@@ -1,5 +1,5 @@
+from collections.abc import Iterable
 import torch.nn as nn
-from typing import Iterable
 
 
 class FreezeParameters:

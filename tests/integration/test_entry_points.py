@@ -1,21 +1,19 @@
 """Run the four Hydra entry points in-process with the real configs, a fake environment and toy model sizes."""
 
-import json
-import os
-import shutil
-import sys
-
-import pytest
-import torch
-from hydra.core.global_hydra import GlobalHydra
-
 import evaluate_sold
 import generate_dataset
+from hydra.core.global_hydra import GlobalHydra
+import json
+import os
 import pl_bolts.optimizers.lr_scheduler  # noqa: F401  (import with the real wandb, before any fake)
-import train_autoencoder
-import train_sold
+import pytest
+import shutil
+import sys
 from tests import fakes
 from tests.conftest import make_tiny_savi
+import torch
+import train_autoencoder
+import train_sold
 
 pytestmark = pytest.mark.slow
 
@@ -64,8 +62,8 @@ def sold_overrides(run_dir, savi_checkpoint, **values):
 @pytest.fixture(scope="module")
 def savi_checkpoint(tmp_path_factory):
     """A toy SAVi checkpoint for 16x16 images and 2-D actions, saved like train_autoencoder does."""
-    from lightning import Trainer
     import functools
+    from lightning import Trainer
 
     path = tmp_path_factory.mktemp("savi") / "latest.ckpt"
     module = train_autoencoder.AutoencoderModule(make_tiny_savi(), functools.partial(torch.optim.Adam, lr=1e-3))

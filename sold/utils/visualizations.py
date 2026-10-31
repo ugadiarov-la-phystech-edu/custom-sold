@@ -7,7 +7,6 @@ import torch
 import torch.nn as nn
 import torchvision
 from torchvision.transforms.functional import rgb_to_grayscale
-from typing import Dict, List, Optional
 
 
 def slot_color(slot_index: int, num_slots: int, saturation: float = 1.0, lightness: float = 0.5) -> torch.Tensor:
@@ -17,7 +16,7 @@ def slot_color(slot_index: int, num_slots: int, saturation: float = 1.0, lightne
 
 
 def make_grid(
-    images: torch.Tensor, num_columns: int, padding: int = 2, pad_color: Optional[torch.Tensor] = None
+    images: torch.Tensor, num_columns: int, padding: int = 2, pad_color: torch.Tensor | None = None
 ) -> torch.Tensor:
     if not torch.is_tensor(images):
         raise TypeError(f"Expected images as type tensor, got {type(images)}")
@@ -59,16 +58,16 @@ def make_grid(
 
 def make_row(
     images: torch.Tensor,
-    max_sequence_length: Optional[int] = None,
+    max_sequence_length: int | None = None,
     padding: int = 2,
-    pad_color: Optional[torch.Tensor] = None,
+    pad_color: torch.Tensor | None = None,
 ) -> torch.Tensor:
     sequence_length, _, _, _ = images.size()
     n_cols = min(sequence_length, max_sequence_length) if max_sequence_length is not None else sequence_length
     return make_grid(images[:n_cols], num_columns=n_cols, padding=padding, pad_color=pad_color)
 
 
-def stack_rows(rows: List[torch.Tensor], height_spacing: int = 2) -> torch.Tensor:
+def stack_rows(rows: list[torch.Tensor], height_spacing: int = 2) -> torch.Tensor:
     grid = []
     for row_index, row in enumerate(rows):
         grid.append(row.cpu())
@@ -78,7 +77,7 @@ def stack_rows(rows: List[torch.Tensor], height_spacing: int = 2) -> torch.Tenso
 
 
 def stack_columns(
-    images: torch.Tensor, num_context: int, pad_color: Optional[torch.Tensor] = None, width_spacing: int = 2
+    images: torch.Tensor, num_context: int, pad_color: torch.Tensor | None = None, width_spacing: int = 2
 ) -> torch.Tensor:
     sequence_length = images.size(0)
     num_predictions = sequence_length - num_context
@@ -225,16 +224,19 @@ def visualize_reward_predictor_attention(
 # ------------------------------------------------------------------------------- SOLD figures
 # Figures of a training batch's first sample, logged by SOLDModule after each evaluation. reconstruction: the
 # autoencoder's outputs for the batch (incl. "images" and "slots", see modeling.autoencoder.losses).
-def _first_sample(outputs: Dict[str, torch.Tensor], steps: slice = slice(None)) -> Dict[str, torch.Tensor]:
+_ALL_STEPS = slice(None)
+
+
+def _first_sample(outputs: dict[str, torch.Tensor], steps: slice = _ALL_STEPS) -> dict[str, torch.Tensor]:
     return {k: v[0, steps] for k, v in outputs.items() if torch.is_tensor(v) and v.dim() > 1}
 
 
 @torch.no_grad()
 def dynamics_figure(
     autoencoder: nn.Module,
-    reconstruction: Dict[str, torch.Tensor],
+    reconstruction: dict[str, torch.Tensor],
     num_context: int,
-    predicted_outputs: Dict[str, torch.Tensor],
+    predicted_outputs: dict[str, torch.Tensor],
 ) -> torch.Tensor:
     """Context frames and reconstructions next to the dynamics model's predictions of the following frames.
 
@@ -251,10 +253,10 @@ def dynamics_figure(
 @torch.no_grad()
 def reward_figures(
     reward_predictor: nn.Module,
-    reconstruction: Dict[str, torch.Tensor],
+    reconstruction: dict[str, torch.Tensor],
     rewards: torch.Tensor,
     predicted_rewards: torch.Tensor,
-) -> Dict[str, torch.Tensor]:
+) -> dict[str, torch.Tensor]:
     """Predicted vs. true rewards and, for slot-based autoencoders, the reward predictor's attention."""
     images, reconstructions = reconstruction["images"][0], reconstruction["reconstructions"][0]
     figures = {
@@ -281,7 +283,7 @@ def imagination_figures(
     imagined_slots: torch.Tensor,
     num_context: int,
     predicted_rewards: torch.Tensor,
-) -> Dict[str, torch.Tensor]:
+) -> dict[str, torch.Tensor]:
     """An imagined trajectory with predicted rewards and, for slot-based autoencoders, the actor's attention."""
     outputs = autoencoder.decode(imagined_slots[0:1])
     rewards = predicted_rewards[0].tolist()

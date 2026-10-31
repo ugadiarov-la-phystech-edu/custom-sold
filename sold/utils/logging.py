@@ -1,17 +1,17 @@
-from abc import ABC
 from collections import defaultdict
+from collections.abc import Mapping
 import json
 from lightning.fabric.utilities.types import _PATH
 from lightning.pytorch.loggers import TensorBoardLogger
 import numpy as np
 import os
 import torch
-from torchvision.utils import save_image
 from torchvision.io import write_video
-from typing import Any, Mapping, Optional, Tuple, Union
+from torchvision.utils import save_image
+from typing import Any
 
 
-class LoggingStepMixin(ABC):
+class LoggingStepMixin:
     """Log against a custom 'logging_step' instead of Lightning's global step.
 
     With an ExtendedTensorBoardLogger, scalars are written once per logging step (after the epoch's last batch, at most
@@ -27,7 +27,7 @@ class LoggingStepMixin(ABC):
     def logging_step(self) -> int:
         return self.current_epoch
 
-    def log(self, name: str, value: Union[torch.Tensor, float], *args, **kwargs) -> None:
+    def log(self, name: str, value: torch.Tensor | float, *args, **kwargs) -> None:
         """Log a scalar; tensors become numbers only when written, not on every call."""
         if isinstance(self.logger, ExtendedTensorBoardLogger):
             if (
@@ -52,7 +52,7 @@ class LoggingStepMixin(ABC):
         if isinstance(self.logger, ExtendedTensorBoardLogger):
             self.logger.log_video(name, video, step=self.logging_step)
 
-    def log_gradients(self, model_names: Tuple[str, ...]) -> None:
+    def log_gradients(self, model_names: tuple[str, ...]) -> None:
         if not self.trainer.is_last_batch:
             return  # Scalars are only written after the epoch's last batch; skip copying gradients.
         for model_name in model_names:
@@ -65,12 +65,12 @@ class ExtendedTensorBoardLogger(TensorBoardLogger):
     def __init__(
         self,
         save_dir: _PATH,
-        name: Optional[str] = "lightning_logs",
-        version: Optional[Union[int, str]] = None,
+        name: str | None = "lightning_logs",
+        version: int | str | None = None,
         log_graph: bool = False,
         default_hp_metric: bool = True,
         prefix: str = "",
-        sub_dir: Optional[_PATH] = None,
+        sub_dir: _PATH | None = None,
         **kwargs: Any,
     ):
         super().__init__(save_dir, name, version, log_graph, default_hp_metric, prefix, sub_dir, **kwargs)

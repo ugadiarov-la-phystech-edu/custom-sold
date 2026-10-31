@@ -2,12 +2,11 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import List
 
 
 class CnnEncoder(nn.Module):
     def __init__(
-        self, num_channels: List[int], kernel_sizes: List[int], strides: List[int], in_channels: int = 3
+        self, num_channels: list[int], kernel_sizes: list[int], strides: list[int], in_channels: int = 3
     ) -> None:
         super().__init__()
         self.in_channels = in_channels

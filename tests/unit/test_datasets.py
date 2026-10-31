@@ -2,17 +2,15 @@
 
 from collections import deque
 import copy
-import logging
-
-import numpy as np
-import pytest
-import torch
-
 from datasets.image import ImageDataset, NPZDataset, PNGDataset, load_image_dataset
 from datasets.info import ColorImage, EpisodeDatasetInfo, Fields, FieldType, Scalar, TensorType, Vector
 from datasets.ring_buffer import EpisodeDataset, RingBufferDataset
 from datasets.utils import NumUpdatesWrapper
+import logging
+import numpy as np
+import pytest
 from tests.conftest import add_episode, make_episode, write_image_dataset
+import torch
 
 
 # ------------------------------------------------------------------------------------- info

@@ -1,3 +1,4 @@
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import hydra
 import numpy as np
 from omegaconf import DictConfig
@@ -5,7 +6,6 @@ import os
 import torch
 from torchvision.transforms import ToPILImage
 import tqdm
-from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
 def save_episode(path: str, cfg: DictConfig) -> None:

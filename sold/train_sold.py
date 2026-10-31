@@ -3,22 +3,22 @@ import copy
 from dataclasses import dataclass
 import gym
 import hydra
-from lightning.pytorch.utilities.types import OptimizerLRScheduler, STEP_OUTPUT
-from modeling.distributions import Moments
+from lightning.pytorch.utilities.types import STEP_OUTPUT, OptimizerLRScheduler
 from modeling.autoencoder.base import Autoencoder
 from modeling.autoencoder.losses import reconstruction_loss
+from modeling.distributions import Moments
 import numpy as np
 from omegaconf import DictConfig
 import os
+import rl.losses
+import rl.returns
 import torch
 import torch.distributions as D
 import torch.nn.functional as F
-from typing import Any, Dict, Tuple
-import rl.losses
-import rl.returns
+from typing import Any
 from utils.instantiate import instantiate_trainer
 from utils.module import FreezeParameters
-from utils.training import set_seed, print_summary, OnlineModule
+from utils.training import OnlineModule, print_summary, set_seed
 from utils.visualizations import dynamics_figure, imagination_figures, reward_figures
 
 
@@ -55,7 +55,7 @@ class SOLDModule(OnlineModule):
         finetune_autoencoder: bool,
         autoencoder_learning_rate: float,
         autoencoder_grad_clip: float,
-        num_context: int | Tuple[int, int],
+        num_context: int | tuple[int, int],
         imagination_horizon: int,
         start_imagination_from_every: bool,
         actor_entropy_loss_weight: float,
@@ -221,7 +221,7 @@ class SOLDModule(OnlineModule):
 
     @torch.no_grad()
     def log_visualizations(
-        self, rewards: torch.Tensor, reconstruction: Dict[str, Any], outputs: Dict[str, Any], imagination: Imagination
+        self, rewards: torch.Tensor, reconstruction: dict[str, Any], outputs: dict[str, Any], imagination: Imagination
     ) -> None:
         """Log figures of the first sample of a training batch (after each evaluation).
 
@@ -254,7 +254,7 @@ class SOLDModule(OnlineModule):
         self.clip_gradients(optimizer, gradient_clip_val=grad_clip, gradient_clip_algorithm="norm")
         optimizer.step()
 
-    def compute_dynamics_loss(self, images: torch.Tensor, slots: torch.Tensor, actions: torch.Tensor) -> Dict[str, Any]:
+    def compute_dynamics_loss(self, images: torch.Tensor, slots: torch.Tensor, actions: torch.Tensor) -> dict[str, Any]:
         self.dynamics_predictor.train()
         batch_size, sequence_length, num_slots, slot_dim = slots.size()
         num_context = torch.randint(self.min_num_context, self.max_num_context + 1, (1,)).item()
@@ -280,7 +280,7 @@ class SOLDModule(OnlineModule):
 
     def compute_reward_loss(
         self, images: torch.Tensor, reconstructions: torch.Tensor, slots: torch.Tensor, rewards: torch.Tensor
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         is_firsts = torch.isnan(rewards)  # We add NaN as a reward on the first time-step.
         predicted_rewards_dist = self.reward_predictor(slots.detach())
         log_probs = predicted_rewards_dist.log_prob(torch.nan_to_num(rewards).unsqueeze(2))
@@ -317,7 +317,7 @@ class SOLDModule(OnlineModule):
         # Actor update
         # Freeze models except action model and imagine next states
         with FreezeParameters([self.reward_predictor, self.critic]):
-            for t in range(self.imagination_horizon):
+            for _ in range(self.imagination_horizon):
                 action_dist = self.actor(slots_context.detach(), start=slots_context.shape[1] - 1)
                 selected_action = action_dist.rsample().squeeze(1)
                 actions_context = torch.cat([actions_context, selected_action.unsqueeze(1)], dim=1)
@@ -361,7 +361,7 @@ class SOLDModule(OnlineModule):
         predicted_values_targ: torch.Tensor,
         action_log_probs: torch.Tensor,
         action_entropies: torch.Tensor,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         offset, invscale = self.return_moments(lambda_returns[:, :-1])  # Updates the running return percentiles.
         return rl.losses.actor_loss(
             lambda_returns,
@@ -377,7 +377,7 @@ class SOLDModule(OnlineModule):
 
     def compute_critic_loss(
         self, predicted_values_dist: D.Distribution, lambda_returns: torch.Tensor, predicted_values_targ: torch.Tensor
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return rl.losses.critic_loss(
             predicted_values_dist,
             lambda_returns,

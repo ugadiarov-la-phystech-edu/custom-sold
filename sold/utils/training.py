@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
 from datasets.ring_buffer import RingBufferDataset
 from datasets.utils import NumUpdatesWrapper
-from utils.episode_runner import EpisodeRunner
 import gym
 import hydra
 from lightning import LightningModule, Trainer
@@ -10,13 +9,14 @@ from lightning.pytorch.utilities.types import STEP_OUTPUT
 import numpy as np
 import os
 from pathlib import Path
-from rich.progress import TaskID
 import random
-from termcolor import colored
+from rich.progress import TaskID
 import shutil
+from termcolor import colored
 import torch
 from torch.utils.data import DataLoader
-from typing import Any, Dict, Optional, Union
+from typing import Any
+from utils.episode_runner import EpisodeRunner
 from utils.logging import LoggingStepMixin
 import warnings
 
@@ -66,7 +66,7 @@ class OnlineProgressBar(RichProgressBar):
     def on_train_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
         return
 
-    def _update(self, progress_bar_id: Optional[TaskID], current: int, visible: bool = True) -> None:
+    def _update(self, progress_bar_id: TaskID | None, current: int, visible: bool = True) -> None:
         if self.progress is not None and self.is_enabled:
             self.progress.update(
                 self.train_progress_bar_id,
@@ -77,7 +77,7 @@ class OnlineProgressBar(RichProgressBar):
             self.refresh()
 
     @property
-    def total_train_batches(self) -> Union[int, float]:
+    def total_train_batches(self) -> int | float:
         return self.pl_module.max_steps
 
 
@@ -195,7 +195,7 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
         self.replay_buffer.add_step({"obs": obs, "action": self.last_action.cpu(), "reward": reward}, done=done)
         self.num_steps += 1
 
-    def _complete_first_timestep(self, step_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _complete_first_timestep(self, step_data: dict[str, Any]) -> dict[str, Any]:
         if "action" not in step_data:
             step_data["action"] = torch.full_like(
                 torch.from_numpy(self.env.action_space.sample().astype(np.float32)), float("nan")
@@ -241,7 +241,7 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
     def logging_step(self) -> int:
         return self.num_steps
 
-    def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+    def on_save_checkpoint(self, checkpoint: dict[str, Any]) -> None:
         checkpoint["num_steps"] = self.num_steps
         checkpoint["num_episodes"] = self.num_episodes
 
@@ -264,7 +264,7 @@ class OnlineModule(LoggingStepMixin, LightningModule, ABC):
             checkpoint["replay_buffer_tail"] = self.replay_buffer.tail
             checkpoint["replay_buffer_episode_boundaries"] = self.replay_buffer.episode_boundaries
 
-    def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+    def on_load_checkpoint(self, checkpoint: dict[str, Any]) -> None:
         self.num_steps = checkpoint["num_steps"]
         self.num_episodes = checkpoint["num_episodes"] - 1  # Incremented at once, since self.runner.done is True.
 

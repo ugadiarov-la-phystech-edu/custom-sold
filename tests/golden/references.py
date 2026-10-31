@@ -20,7 +20,6 @@ are regenerated with the others.
 from pathlib import Path
 import sys
 import tempfile
-
 import torch
 
 DATA_DIR = Path(__file__).parent / "data"

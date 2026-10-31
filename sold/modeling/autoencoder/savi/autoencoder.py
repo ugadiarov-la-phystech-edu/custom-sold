@@ -1,10 +1,9 @@
 import math
 from modeling.autoencoder.base import Autoencoder
-from modeling.autoencoder.savi import Corrector, SlotInitializer, Predictor, SaviCnnEncoder, SaviCnnDecoder
+from modeling.autoencoder.savi import Corrector, Predictor, SaviCnnDecoder, SaviCnnEncoder, SlotInitializer
 from modeling.autoencoder.savi.predictor import init_xavier_
 import torch
-from typing import Dict, Optional
-from utils.visualizations import make_row, stack_rows, create_segmentation_overlay, slot_color, draw_ticks
+from utils.visualizations import create_segmentation_overlay, draw_ticks, make_row, slot_color, stack_rows
 
 
 class SAVi(Autoencoder):
@@ -44,7 +43,7 @@ class SAVi(Autoencoder):
         return self.corrector.slot_dim
 
     def encode(
-        self, images: torch.Tensor, actions: torch.Tensor, prior_slots: Optional[torch.Tensor] = None
+        self, images: torch.Tensor, actions: torch.Tensor, prior_slots: torch.Tensor | None = None
     ) -> torch.Tensor:
         slots_sequence = []
         batch_size, sequence_length, _, _, _ = images.size()
@@ -62,7 +61,7 @@ class SAVi(Autoencoder):
         slots_sequence = torch.stack(slots_sequence, dim=1)
         return slots_sequence
 
-    def decode(self, slots: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def decode(self, slots: torch.Tensor) -> dict[str, torch.Tensor]:
         batch_size, sequence_length, num_slots, slot_dim = slots.size()
         rgbs, masks = self.decoder(slots.flatten(end_dim=1))
         rgbs = rgbs.view(batch_size, sequence_length, num_slots, 3, *self.decoder.image_size)
@@ -70,8 +69,8 @@ class SAVi(Autoencoder):
         return {"reconstructions": torch.sum(rgbs * masks, dim=2).clamp(0, 1), "rgbs": rgbs, "masks": masks}
 
     def forward(
-        self, images: torch.Tensor, actions: torch.Tensor, prior_slots: Optional[torch.Tensor] = None
-    ) -> Dict[str, torch.Tensor]:
+        self, images: torch.Tensor, actions: torch.Tensor, prior_slots: torch.Tensor | None = None
+    ) -> dict[str, torch.Tensor]:
         batch_size, sequence_length, num_channels, height, width = images.size()
         outputs = super().forward(images, actions, prior_slots)
         outputs["rgbs"] = outputs["rgbs"].reshape(
@@ -81,7 +80,7 @@ class SAVi(Autoencoder):
         return outputs
 
     @torch.no_grad()
-    def visualize_reconstruction(self, outputs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def visualize_reconstruction(self, outputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         sequence_length, num_slots, _, height, width = outputs["rgbs"].size()
         rows = []
         if "images" in outputs:

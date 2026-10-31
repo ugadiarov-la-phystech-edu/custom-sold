@@ -1,9 +1,5 @@
 """modeling/sold: dynamics model, slot aggregation transformer and predictors."""
 
-import pytest
-import torch
-import torch.distributions as D
-
 from modeling.attention_mask import AlibiMask, CausalMask
 from modeling.distributions import TwoHotEncodingDistribution
 from modeling.positional_encoding import LearnedEncoding, NoPositionalEncoding
@@ -15,6 +11,9 @@ from modeling.sold.dynamics import (
 )
 from modeling.sold.prediction import GaussianPredictor, Predictor, RMSNorm, ScalarPredictor, TwoHotPredictor
 from modeling.sold.slot_aggregation_transformer import SlotAggregationTransformer, TransformerEncoderLayer
+import pytest
+import torch
+import torch.distributions as D
 
 
 # ---------------------------------------------------------------------------------- dynamics

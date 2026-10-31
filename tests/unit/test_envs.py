@@ -1,19 +1,17 @@
 """envs: wrappers, make_env for every suite, multi_object_fetch distractor sampling, dm_control adapters."""
 
-import importlib
-import os
-import sys
-
-import numpy as np
-import pytest
-import torch
-
 import envs
 from envs.wrappers.action_repeat import ActionRepeat
 from envs.wrappers.pixels import Pixels
 from envs.wrappers.time_limit import TimeLimit
 from envs.wrappers.to_tensor import ToTensor
+import importlib
+import numpy as np
+import os
+import pytest
+import sys
 from tests import fakes
+import torch
 
 
 def test_make_env_selects_egl(monkeypatch):

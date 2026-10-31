@@ -1,10 +1,9 @@
 """The real multi_object_fetch environments through SOLD's wrapper stack (needs mujoco-py with rendering)."""
 
-import pytest
-import torch
-
 import envs
 from envs.from_mof import VariableDistractorsWrapper
+import pytest
+import torch
 
 pytestmark = pytest.mark.mujoco
 

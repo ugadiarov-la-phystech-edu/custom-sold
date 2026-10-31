@@ -2,7 +2,6 @@ from modeling.autoencoder.cnn.encoder import CnnEncoder
 from modeling.autoencoder.savi.encoder import ImagePositionalEmbedding
 import torch
 import torch.nn.functional as F
-from typing import List, Tuple
 
 
 class SaviCnnDecoder(CnnEncoder):
@@ -10,10 +9,10 @@ class SaviCnnDecoder(CnnEncoder):
 
     def __init__(
         self,
-        image_size: Tuple[int, int],
-        num_channels: List[int],
-        kernel_sizes: List[int],
-        strides: List[int],
+        image_size: tuple[int, int],
+        num_channels: list[int],
+        kernel_sizes: list[int],
+        strides: list[int],
         in_channels: int,
     ) -> None:
         super().__init__(
@@ -32,7 +31,7 @@ class SaviCnnDecoder(CnnEncoder):
         self.slot_dim = in_channels
         self.positional_embedding = ImagePositionalEmbedding(feature_dim=in_channels, image_size=image_size)
 
-    def forward(self, slots: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, slots: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         batch_size, num_slots, slot_dim = slots.size()
         if slot_dim != self.slot_dim:
             raise ValueError(f"Expected slot dimension to be {self.slot_dim}, but got {slot_dim}")

@@ -1,9 +1,8 @@
 from modeling.attention_mask import AttentionMask
 from modeling.positional_encoding import PositionalEncoding
 import torch
-from torch import nn, Tensor
-from torch.nn import Module, Linear, Dropout, MultiheadAttention, RMSNorm
-from typing import List, Optional, Tuple
+from torch import Tensor, nn
+from torch.nn import Dropout, Linear, Module, MultiheadAttention, RMSNorm
 
 
 class SlotAggregationTransformer(nn.Module):
@@ -50,11 +49,11 @@ class SlotAggregationTransformer(nn.Module):
         """Output tokens from time step start on, shape (batch_size, sequence_length - start, token_dim)."""
         return self._encode(slots, start, return_attention=False)[0]
 
-    def forward_with_attention(self, slots: torch.Tensor, start: int = 0) -> Tuple[torch.Tensor, List[torch.Tensor]]:
+    def forward_with_attention(self, slots: torch.Tensor, start: int = 0) -> tuple[torch.Tensor, list[torch.Tensor]]:
         """The output tokens and each layer's head-averaged attention weights, (batch_size, num_tokens, num_tokens)."""
         return self._encode(slots, start, return_attention=True)
 
-    def _encode(self, slots: torch.Tensor, start: int, return_attention: bool) -> Tuple[torch.Tensor, List]:
+    def _encode(self, slots: torch.Tensor, start: int, return_attention: bool) -> tuple[torch.Tensor, list]:
         batch_size, sequence_length, num_slots, slot_dim = slots.shape
         slot_tokens = self.slot_projection(slots)  # Project slots to token_dim.
 
@@ -93,12 +92,12 @@ class TransformerEncoderLayer(Module):
 
         self.activation = nn.SiLU()
 
-    def forward(self, src: Tensor, src_mask: Optional[Tensor] = None) -> Tensor:
+    def forward(self, src: Tensor, src_mask: Tensor | None = None) -> Tensor:
         return self.encode(src, src_mask)[0]
 
     def encode(
-        self, src: Tensor, src_mask: Optional[Tensor] = None, return_attention: bool = False
-    ) -> Tuple[Tensor, Optional[Tensor]]:
+        self, src: Tensor, src_mask: Tensor | None = None, return_attention: bool = False
+    ) -> tuple[Tensor, Tensor | None]:
         """The layer's output and, with return_attention, its head-averaged attention weights (else None)."""
         x = src
         attention, weights = self._sa_block(self.norm1(x), src_mask, return_attention)
@@ -108,8 +107,8 @@ class TransformerEncoderLayer(Module):
 
     # self-attention block
     def _sa_block(
-        self, x: Tensor, attn_mask: Optional[Tensor], need_weights: bool = False
-    ) -> Tuple[Tensor, Optional[Tensor]]:
+        self, x: Tensor, attn_mask: Tensor | None, need_weights: bool = False
+    ) -> tuple[Tensor, Tensor | None]:
         x, weights = self.self_attn(x, x, x, attn_mask=attn_mask, need_weights=need_weights)
         return self.dropout1(x), weights
 

@@ -2,11 +2,10 @@ from abc import ABC, abstractmethod
 import math
 import torch
 import torch.nn as nn
-from typing import List, Tuple
 
 
 class Decoder(nn.Module, ABC):
-    def __init__(self, image_size: Tuple[int, int], out_channels: int) -> None:
+    def __init__(self, image_size: tuple[int, int], out_channels: int) -> None:
         super().__init__()
         self.image_size = image_size
         self.out_channels = out_channels
@@ -20,10 +19,10 @@ class CnnDecoder(Decoder):
     def __init__(
         self,
         embedding_dim: int,
-        image_size: Tuple[int, int],
-        num_channels: List[int],
-        kernel_sizes: List[int],
-        strides: List[int],
+        image_size: tuple[int, int],
+        num_channels: list[int],
+        kernel_sizes: list[int],
+        strides: list[int],
     ) -> None:
         super().__init__(image_size, 3)
         assert len(num_channels) == len(kernel_sizes) == len(strides), (
@@ -59,13 +58,13 @@ class CnnDecoder(Decoder):
 
         self.decoder = nn.Sequential(*layers)
 
-    def forward(self, embeddings: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, embeddings: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         batch_size = embeddings.size(0)
         feature_map = self.embeddings_to_feature_map(embeddings).view(batch_size, -1, *self.feature_map_size)
         return self.decoder(feature_map).unsqueeze(1)
 
     @staticmethod
-    def get_same_padding(kernel_size: int, stride: int, dilation: int) -> Tuple[int, int]:
+    def get_same_padding(kernel_size: int, stride: int, dilation: int) -> tuple[int, int]:
         val = dilation * (kernel_size - 1) - stride + 1
         padding = math.ceil(val / 2)
         output_padding = padding * 2 - val

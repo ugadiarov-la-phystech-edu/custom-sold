@@ -2,12 +2,11 @@
 
 from collections import namedtuple
 import enum
+import gym
 import importlib.machinery
+import numpy as np
 import sys
 import types
-
-import gym
-import numpy as np
 
 
 class FakePixelEnv(gym.Env):

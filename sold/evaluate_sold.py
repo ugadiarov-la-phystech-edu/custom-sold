@@ -3,12 +3,11 @@ import hydra
 import json
 from omegaconf import DictConfig
 import os
-from tqdm import tqdm
 import torch
-from torchvision.io import write_video
 from torchvision import transforms
+from torchvision.io import write_video
+from tqdm import tqdm
 from train_sold import SOLDModule
-from typing import List
 from utils.training import set_seed
 
 
@@ -17,7 +16,7 @@ def render_high_res(env: gym.Env) -> torch.Tensor:
     return transforms.ToTensor()(env.render(size=(1024, 1024)).copy())
 
 
-def get_checkpoint_files(checkpoint_path: str) -> List[str]:
+def get_checkpoint_files(checkpoint_path: str) -> list[str]:
     if not os.path.isabs(checkpoint_path):
         checkpoint_path = os.path.join(hydra.utils.get_original_cwd(), checkpoint_path)
 

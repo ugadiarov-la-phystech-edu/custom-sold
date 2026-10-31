@@ -3,7 +3,6 @@
 from abc import ABC, abstractmethod
 import torch
 import torch.nn as nn
-from typing import Dict, Optional
 from utils.visualizations import make_row, stack_rows
 
 
@@ -20,7 +19,7 @@ class Autoencoder(ABC, nn.Module):
 
     @abstractmethod
     def encode(
-        self, images: torch.Tensor, actions: torch.Tensor, prior_slots: Optional[torch.Tensor] = None
+        self, images: torch.Tensor, actions: torch.Tensor, prior_slots: torch.Tensor | None = None
     ) -> torch.Tensor:
         """Encode images into slots.
         Args:
@@ -35,7 +34,7 @@ class Autoencoder(ABC, nn.Module):
         pass
 
     @abstractmethod
-    def decode(self, slots: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def decode(self, slots: torch.Tensor) -> dict[str, torch.Tensor]:
         """Decode slots into images.
         Args:
             slots (torch.Tensor): Slots of shape (batch_size, sequence_length, num_slots, slot_dim).
@@ -47,8 +46,8 @@ class Autoencoder(ABC, nn.Module):
         pass
 
     def forward(
-        self, images: torch.Tensor, actions: torch.Tensor, prior_slots: Optional[torch.Tensor] = None
-    ) -> Dict[str, torch.Tensor]:
+        self, images: torch.Tensor, actions: torch.Tensor, prior_slots: torch.Tensor | None = None
+    ) -> dict[str, torch.Tensor]:
         batch_size, sequence_length, num_channels, height, width = images.size()
         slots = self.encode(images, actions, prior_slots)
         outputs = self.decode(slots)
@@ -56,7 +55,7 @@ class Autoencoder(ABC, nn.Module):
             raise ValueError("Expected 'reconstructions' to be present in decode outputs.")
         return {**outputs, "slots": slots}
 
-    def visualize_reconstruction(self, outputs: Dict[str, torch.Tensor]) -> torch.Tensor:
+    def visualize_reconstruction(self, outputs: dict[str, torch.Tensor]) -> torch.Tensor:
         rows = []
         if "images" in outputs:
             rows.append(make_row(outputs["images"].cpu()))

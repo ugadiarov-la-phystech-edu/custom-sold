@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 import torch
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any
 
 
 @dataclass
@@ -15,9 +16,9 @@ class FieldType(ABC):
 
 @dataclass
 class TensorType(FieldType):
-    device: Union[torch.device, str]
-    dtype: Union[torch.dtype, str]
-    shape: Union[torch.Size, Sequence[int]]
+    device: torch.device | str
+    dtype: torch.dtype | str
+    shape: torch.Size | Sequence[int]
 
     def __post_init__(self) -> None:
         self.device = self.device if isinstance(self.device, torch.device) else torch.device(self.device)
@@ -37,7 +38,7 @@ class TensorType(FieldType):
 
 @dataclass
 class Scalar(TensorType):
-    shape: Union[torch.Size, Sequence[int]] = field(repr=False)
+    shape: torch.Size | Sequence[int] = field(repr=False)
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -69,8 +70,8 @@ class ColorImage(TensorType):
 
     height: int
     width: int
-    dtype: Union[torch.dtype, str] = field(init=False, repr=False)
-    shape: Union[torch.Size, Sequence[int]] = field(init=False, repr=False)
+    dtype: torch.dtype | str = field(init=False, repr=False)
+    shape: torch.Size | Sequence[int] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.dtype = torch.uint8
@@ -90,7 +91,7 @@ class Fields(dict):
     """
 
     @classmethod
-    def from_episode(cls, episode: Dict[str, List]) -> "Fields":
+    def from_episode(cls, episode: dict[str, list]) -> "Fields":
         dic = {}
         for key, value in episode.items():
             if not isinstance(value, list) or len(value) == 0:
@@ -114,10 +115,10 @@ class Fields(dict):
 
 @dataclass
 class EpisodeDatasetInfo:
-    fields: Optional[Fields] = None
+    fields: Fields | None = None
     num_episodes: int = 0
     num_timesteps: int = 0
-    episode_lengths: List[int] = field(default_factory=list)
+    episode_lengths: list[int] = field(default_factory=list)
     is_full: bool = False
 
     @property
@@ -130,7 +131,7 @@ class EpisodeDatasetInfoMixin:
         self.info = info
         self.last_episode_return = None
 
-    def _update_stats_on_store(self, episode: Dict[str, List]) -> None:
+    def _update_stats_on_store(self, episode: dict[str, list]) -> None:
         self.info.num_episodes += 1
         self.info.num_timesteps += len(next(iter(episode.values())))
         self.info.episode_lengths.append(len(next(iter(episode.values()))))
@@ -150,7 +151,7 @@ class EpisodeDatasetInfoMixin:
         return self.info.num_timesteps
 
     @property
-    def episode_lengths(self) -> List[int]:
+    def episode_lengths(self) -> list[int]:
         return self.info.episode_lengths
 
     @property

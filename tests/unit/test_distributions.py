@@ -1,8 +1,7 @@
+from modeling.distributions import Moments, TwoHotEncodingDistribution, symexp, symlog
 import pytest
 import torch
 import torch.nn.functional as F
-
-from modeling.distributions import Moments, TwoHotEncodingDistribution, symexp, symlog
 
 
 def test_symlog_symexp_are_inverse():

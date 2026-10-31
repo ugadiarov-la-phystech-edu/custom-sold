@@ -2,10 +2,8 @@
 
 import importlib
 import importlib.metadata as metadata
-
-import pytest
 from packaging.version import Version
-
+import pytest
 from tests.conftest import CHECKPOINTS_DIR, is_lfs_pointer
 
 

@@ -1,8 +1,7 @@
 import math
-import warnings
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
-from typing import List
+import warnings
 
 
 class LinearWarmupCosineAnnealingLR(LRScheduler):
@@ -26,10 +25,12 @@ class LinearWarmupCosineAnnealingLR(LRScheduler):
         self.eta_min = eta_min
         super().__init__(optimizer, last_epoch)
 
-    def get_lr(self) -> List[float]:
+    def get_lr(self) -> list[float]:
         """The chainable (recursive) form, as in lightning-bolts."""
         if not self._get_lr_called_within_step:
-            warnings.warn("To get the last learning rate computed by the scheduler, please use `get_last_lr()`.")
+            warnings.warn(
+                "To get the last learning rate computed by the scheduler, please use `get_last_lr()`.", stacklevel=2
+            )
 
         if self.last_epoch == 0:
             return [self.warmup_start_lr] * len(self.base_lrs)

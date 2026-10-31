@@ -1,11 +1,11 @@
+from .slot_aggregation_transformer import SlotAggregationTransformer
+from collections.abc import Callable
 from modeling.attention_mask import AlibiMask
 from modeling.distributions import TwoHotEncodingDistribution
 from modeling.positional_encoding import NoPositionalEncoding
-from .slot_aggregation_transformer import SlotAggregationTransformer
 import torch
 import torch.distributions as D
 import torch.nn as nn
-from typing import Callable
 
 
 class RMSNorm(nn.Module):

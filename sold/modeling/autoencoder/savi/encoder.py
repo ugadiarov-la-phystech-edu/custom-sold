@@ -1,13 +1,12 @@
 from modeling.autoencoder.cnn.encoder import CnnEncoder
 import torch
 import torch.nn as nn
-from typing import List, Tuple
 
 
 class ImagePositionalEmbedding(nn.Module):
     """Soft image positional embedding as proposed by Slot Attention (https://arxiv.org/pdf/2006.15055, Section E.2)."""
 
-    def __init__(self, feature_dim: int, image_size: Tuple[int, int]) -> None:
+    def __init__(self, feature_dim: int, image_size: tuple[int, int]) -> None:
         """Initializes the positional embedding based on the image and feature dimensions.
 
         Args:
@@ -36,10 +35,10 @@ class SaviCnnEncoder(CnnEncoder):
 
     def __init__(
         self,
-        image_size: Tuple[int, int],
-        num_channels: List[int],
-        kernel_sizes: List[int],
-        strides: List[int],
+        image_size: tuple[int, int],
+        num_channels: list[int],
+        kernel_sizes: list[int],
+        strides: list[int],
         feature_dim: int,
     ) -> None:
         super().__init__(num_channels, kernel_sizes, strides)

@@ -1,17 +1,16 @@
 import gym
-from PIL import Image
 import numpy as np
-from typing import Tuple
+from PIL import Image
 
 
 class Pixels(gym.Wrapper):
-    def __init__(self, env: gym.Env, image_size: Tuple[int, int]) -> None:
+    def __init__(self, env: gym.Env, image_size: tuple[int, int]) -> None:
         super().__init__(env)
         self.image_size = image_size
         self.observation_space = gym.spaces.Box(low=0, high=1, shape=(3,) + image_size, dtype=float)
         self.renders_at_size = _is_multi_object_fetch(env.unwrapped)
 
-    def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, dict]:
+    def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, dict]:
         _, reward, done, info = self.env.step(action)
         return self._get_obs(), reward, done, info
 

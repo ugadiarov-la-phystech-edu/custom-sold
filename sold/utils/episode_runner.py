@@ -1,7 +1,8 @@
 from collections import defaultdict
+from collections.abc import Callable
 import gym
 import torch
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any
 
 
 class EpisodeRunner:
@@ -13,7 +14,7 @@ class EpisodeRunner:
     def __init__(self, env: gym.Env, policy: Callable[..., torch.Tensor]) -> None:
         self.env = env
         self.policy = policy
-        self.obs: Optional[torch.Tensor] = None
+        self.obs: torch.Tensor | None = None
         self.done = True  # No episode in progress.
         self.is_first = True  # The next step is the first of its episode.
 
@@ -22,8 +23,8 @@ class EpisodeRunner:
         self.obs, self.done, self.is_first = self.env.reset(), False, True
         return self.obs
 
-    def step(self, mode: str) -> Tuple[torch.Tensor, float, bool, Dict[str, Any]]:
-        """Select an action in the given mode ("train", "eval" or "random"), take it, and return obs, reward, done, info."""
+    def step(self, mode: str) -> tuple[torch.Tensor, float, bool, dict[str, Any]]:
+        """Take an action chosen in mode ("train", "eval" or "random"); return obs, reward, done, info."""
         action = self.policy(self.obs, is_first=self.is_first, mode=mode)
         self.obs, reward, self.done, info = self.env.step(action.cpu())
         self.is_first = False
@@ -31,8 +32,8 @@ class EpisodeRunner:
 
     @torch.no_grad()
     def play_episode(
-        self, mode: str = "eval", render: Optional[Callable[[gym.Env], torch.Tensor]] = None
-    ) -> Dict[str, Any]:
+        self, mode: str = "eval", render: Callable[[gym.Env], torch.Tensor] | None = None
+    ) -> dict[str, Any]:
         """Play a whole episode without storing experience.
 
         Returns the observations, rewards, final "success" (if reported) and, with render, a frame after every reset

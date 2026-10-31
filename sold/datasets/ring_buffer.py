@@ -1,13 +1,13 @@
 from abc import ABC, abstractmethod
 from collections import defaultdict, deque
+from datasets.info import EpisodeDatasetInfo, EpisodeDatasetInfoMixin, Fields
 import logging
 import numpy as np
 import os
 import shutil
-from datasets.info import EpisodeDatasetInfo, EpisodeDatasetInfoMixin, Fields
-from tqdm import tqdm
 import torch
-from typing import Any, Dict, List, Optional
+from tqdm import tqdm
+from typing import Any
 import warnings
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ class EpisodeDataset(EpisodeDatasetInfoMixin, ABC):
         capacity: int,
         batch_size: int,
         sequence_length: int = 1,
-        info: Optional[EpisodeDatasetInfo] = None,
+        info: EpisodeDatasetInfo | None = None,
     ) -> None:
         info = info or EpisodeDatasetInfo()
         EpisodeDatasetInfoMixin.__init__(self, info=info)
@@ -44,7 +44,7 @@ class EpisodeDataset(EpisodeDatasetInfoMixin, ABC):
         """Used to initialize the episode dataset's storage from fields."""
         pass
 
-    def add_step(self, step_data: Dict[str, Any], done: bool = False) -> None:
+    def add_step(self, step_data: dict[str, Any], done: bool = False) -> None:
         """Add a batch of step data to the buffer.
 
         Args:
@@ -62,7 +62,7 @@ class EpisodeDataset(EpisodeDatasetInfoMixin, ABC):
             self.add_episode(self.current_episode)
             self.current_episode = defaultdict(list)
 
-    def add_episode(self, episode: Dict[str, List]) -> None:
+    def add_episode(self, episode: dict[str, list]) -> None:
         # If dataset fields are not defined, initialize them from the first episode.
         if not self.info.fields:
             self.info.fields = Fields.from_episode(episode)
@@ -78,7 +78,7 @@ class EpisodeDataset(EpisodeDatasetInfoMixin, ABC):
         self._update_stats_on_store(episode)
 
     @abstractmethod
-    def store_episode(self, episode: Dict[str, List]) -> None:
+    def store_episode(self, episode: dict[str, list]) -> None:
         """Add an episode to the storage.
 
         Args:
@@ -94,7 +94,7 @@ class EpisodeDataset(EpisodeDatasetInfoMixin, ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def sample(self) -> Dict[str, torch.Tensor]:
+    def sample(self) -> dict[str, torch.Tensor]:
         """Sample a batch of sequences from the dataset.
 
         Returns:
@@ -110,8 +110,8 @@ class RingBufferDataset(EpisodeDataset):
         capacity: int,
         batch_size: int,
         sequence_length: int = 1,
-        info: Optional[EpisodeDatasetInfo] = None,
-        save_path: Optional[str] = None,
+        info: EpisodeDatasetInfo | None = None,
+        save_path: str | None = None,
     ) -> None:
         self.save_path = save_path  # Needed by _initialize_from_fields, which the parent may call.
         super().__init__(capacity, batch_size, sequence_length, info)
@@ -121,7 +121,7 @@ class RingBufferDataset(EpisodeDataset):
         self.head = 0
         self.tail = 0
 
-    def store_episode(self, episode: Dict[str, List]) -> None:
+    def store_episode(self, episode: dict[str, list]) -> None:
         # Determine place for the new episode.
         start = self.tail
         end = self.tail + len(next(iter(episode.values())))
@@ -150,7 +150,7 @@ class RingBufferDataset(EpisodeDataset):
         # Remove the oldest episode from the episode boundaries.
         self.episode_boundaries.popleft()
 
-    def sample(self) -> Dict[str, torch.Tensor]:
+    def sample(self) -> dict[str, torch.Tensor]:
         # Get indices of viable episodes.
         if self.sequence_length is None:
             viable_episode_indices = torch.arange(self.num_episodes)
@@ -190,7 +190,8 @@ class RingBufferDataset(EpisodeDataset):
             else:
                 warnings.warn(
                     f"Episodes have been stored to the buffer, but none are of sufficient length for sampling "
-                    f"sequence length {self.sequence_length}."
+                    f"sequence length {self.sequence_length}.",
+                    stacklevel=2,
                 )
         return True
 

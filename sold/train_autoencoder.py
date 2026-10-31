@@ -1,14 +1,15 @@
+from collections.abc import Callable, Iterable
 import hydra
 from lightning import LightningModule
-from lightning.pytorch.utilities.types import Optimizer, OptimizerLRScheduler, STEP_OUTPUT
+from lightning.pytorch.utilities.types import STEP_OUTPUT, Optimizer, OptimizerLRScheduler
 from modeling.autoencoder.base import Autoencoder
 from modeling.autoencoder.losses import reconstruction_loss
 from omegaconf import DictConfig
 import os
 from termcolor import colored
 import torch
-from typing import Any, Callable, Dict, Iterable, Optional, Tuple
-from utils.instantiate import instantiate_trainer, instantiate_dataloaders, fill_in_missing
+from typing import Any
+from utils.instantiate import fill_in_missing, instantiate_dataloaders, instantiate_trainer
 from utils.logging import LoggingStepMixin
 from utils.training import set_seed
 
@@ -18,7 +19,7 @@ class AutoencoderModule(LoggingStepMixin, LightningModule):
         self,
         autoencoder: Autoencoder,
         optimizer: Callable[[Iterable], Optimizer],
-        scheduler: Optional[DictConfig] = None,
+        scheduler: DictConfig | None = None,
     ) -> None:
         super().__init__()
         self.autoencoder = autoencoder
@@ -37,16 +38,16 @@ class AutoencoderModule(LoggingStepMixin, LightningModule):
             return {"optimizer": optimizer, "lr_scheduler": scheduler_dict}
         return {"optimizer": optimizer}
 
-    def compute_reconstruction_loss(self, images: torch.Tensor, actions: torch.Tensor) -> Dict[str, Any]:
+    def compute_reconstruction_loss(self, images: torch.Tensor, actions: torch.Tensor) -> dict[str, Any]:
         return reconstruction_loss(self.autoencoder, images, actions)
 
-    def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_index: int) -> STEP_OUTPUT:
+    def training_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_index: int) -> STEP_OUTPUT:
         images, actions = batch
         outputs = self.compute_reconstruction_loss(images, actions)
         self.log("train/reconstruction_loss", outputs["reconstruction_loss"], prog_bar=True)
         return {**outputs, "loss": outputs["reconstruction_loss"]}
 
-    def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_index: int) -> STEP_OUTPUT:
+    def validation_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_index: int) -> STEP_OUTPUT:
         images, actions = batch
         outputs = self.compute_reconstruction_loss(images, actions)
         self.log("valid/reconstruction_loss", outputs["reconstruction_loss"], prog_bar=True)
