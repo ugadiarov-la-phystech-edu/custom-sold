@@ -230,6 +230,8 @@ def test_warmup_cosine_schedule_follows_the_closed_form():
 def test_warmup_cosine_schedule_matches_lightning_bolts_exactly():
     """Copied from lightning-bolts 0.7.0; checked where it is still installed."""
     lr_scheduler = pytest.importorskip("pl_bolts.optimizers.lr_scheduler")
+    if lr_scheduler.LinearWarmupCosineAnnealingLR is LinearWarmupCosineAnnealingLR:
+        pytest.skip("lightning-bolts is not installed: its name is an alias for sold's copy")
     for kwargs in [dict(warmup_epochs=10, max_epochs=40), dict(warmup_epochs=3, max_epochs=8, eta_min=1e-4)]:
         # Past max_epochs too, covering the chainable form's restart branch.
         assert _learning_rates(LinearWarmupCosineAnnealingLR, 60, **kwargs) == _learning_rates(

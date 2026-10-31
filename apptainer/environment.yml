@@ -14,7 +14,6 @@ dependencies:
     - gym<=0.17.3
     - hydra-core
     - lightning
-    - lightning-bolts
     - matplotlib
     - moviepy<2
     - mujoco-py

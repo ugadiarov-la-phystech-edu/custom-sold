@@ -18,10 +18,8 @@ def test_03_pinned_versions():
     # 3a: OnlineProgressBar crashes with lightning >= 2.5.3; 3b: rich >= 14.1 crashes lightning 2.5.2.
     assert Version(metadata.version("lightning")) < Version("2.5.3")
     assert Version(metadata.version("rich")) < Version("14.1")
-    # 3c: lightning-bolts imports pkg_resources, removed in setuptools 81.
+    # 3c: setuptools 81 drops pkg_resources, which tensorboard imports.
     assert Version(metadata.version("setuptools")) < Version("81")
-    import pkg_resources  # noqa: F401
-    import pl_bolts.optimizers.lr_scheduler  # noqa: F401
 
 
 @pytest.mark.parametrize(
@@ -30,7 +28,6 @@ def test_03_pinned_versions():
         "torch",
         "torchvision",
         "lightning",
-        "pl_bolts",
         "hydra",
         "omegaconf",
         "rich",

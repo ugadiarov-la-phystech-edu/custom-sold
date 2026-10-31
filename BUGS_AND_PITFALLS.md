@@ -132,7 +132,6 @@ An unpinned install today pulls versions that hit 3a, 3b and 3c.
 |---|---|
 | torch / torchvision | 2.9.0 / 0.24.0 |
 | lightning | 2.5.2 |
-| lightning-bolts / pytorch-lightning | 0.7.0 / 1.9.5 |
 | rich | 14.0.0 |
 | setuptools | below 81 |
 | hydra-core / omegaconf | 1.3.2 / 2.3.0 |
@@ -170,7 +169,7 @@ IndexError: pop from empty list
 
 ### 3c. setuptools 81 and newer break `lightning-bolts`
 
-**Status:** new SAVi training no longer uses lightning-bolts: its scheduler was copied to `sold/utils/schedulers.py`. The package stays installed (and with it the `setuptools<81` pin), because existing SAVi checkpoints pickle `pl_bolts.optimizers.lr_scheduler.LinearWarmupCosineAnnealingLR` in their hyperparameters and import it when loaded. Dropping it needs a module alias for those checkpoints.
+**Status:** lightning-bolts is no longer a dependency. Its scheduler was copied to `sold/utils/schedulers.py`, and existing SAVi checkpoints, which name `pl_bolts.optimizers.lr_scheduler.LinearWarmupCosineAnnealingLR`, load through an alias to it (`sold/_legacy_modules.py`) where lightning-bolts is not installed. The `setuptools<81` pin stays, because tensorboard (`tensorboard/default.py`, used by the `tensorboard` command) imports `pkg_resources` too.
 
 `lightning-bolts` 0.7.0 imports `pkg_resources`, which recent setuptools releases no longer ship.
 Both training scripts fail, because the autoencoder config uses the bolts learning-rate scheduler and `train_sold.py` loads the autoencoder through it:

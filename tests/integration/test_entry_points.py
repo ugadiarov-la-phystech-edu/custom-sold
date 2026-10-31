@@ -3,7 +3,6 @@
 from hydra.core.global_hydra import GlobalHydra
 import json
 import os
-import pl_bolts.optimizers.lr_scheduler  # noqa: F401  (import with the real wandb, before any fake)
 import pytest
 import shutil
 from sold import evaluate_sold, generate_dataset, train_autoencoder, train_sold

@@ -46,11 +46,9 @@ PACKAGES=(
     "torch==2.9.0"
     "torchvision==0.24.0"
     "lightning==2.5.2"              # >=2.5.3 crashes OnlineProgressBar (3a)
-    "lightning-bolts==0.7.0"
-    "pytorch-lightning==1.9.5"      # required by lightning-bolts 0.7.0
     "torchmetrics==1.8.2"
     "rich==14.0.0"                  # >=14.1 crashes lightning 2.5.2 (3b)
-    "setuptools<81"                 # >=81 drops pkg_resources (3c)
+    "setuptools<81"                 # >=81 drops pkg_resources, which tensorboard imports (3c)
     "hydra-core==1.3.2"
     "hydra-submitit-launcher==1.2.0"
     "omegaconf==2.3.0"
@@ -133,7 +131,7 @@ python - <<'EOF'
 import warnings
 warnings.filterwarnings("ignore")
 import importlib
-mods = ["torch", "torchvision", "lightning", "pl_bolts", "hydra", "omegaconf", "rich", "termcolor",
+mods = ["torch", "torchvision", "lightning", "hydra", "omegaconf", "rich", "termcolor",
         "matplotlib", "tensorboard", "tensorboardX", "av", "moviepy", "wandb", "numpy", "gym", "mujoco_py", "pytest"]
 for name in mods:
     module = importlib.import_module(name)
