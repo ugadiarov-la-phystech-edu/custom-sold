@@ -295,6 +295,36 @@ def test_fit_resumes_from_its_own_checkpoint(fitted, tmp_path):
     assert sold.replay_buffer.num_episodes > 3  # The saved buffer (3 episodes) plus the new ones.
 
 
+def _optimizer_kernels(sold):
+    return {(group["fused"], group["foreach"]) for optimizer in sold.optimizers for group in optimizer.param_groups}
+
+
+def test_fit_uses_fused_optimizers_only_on_gpus_by_default(fitted):
+    sold, _ = fitted
+    assert not sold.fused_optimizers and _optimizer_kernels(sold) == {(None, None)}
+
+
+def test_fused_and_unfused_optimizers_resume_from_each_others_checkpoints(fitted, tmp_path):
+    _, log_dir = fitted
+    latest = sorted((log_dir / "checkpoints").glob("*.ckpt"))[-1]
+    saved = torch.load(latest, weights_only=False)["optimizer_states"]
+    assert {group["fused"] for state in saved for group in state["param_groups"]} == {None}
+    fused = make_tiny_sold(max_steps=30)
+    fit_sold(fused, tmp_path / "fused", checkpoint=latest, fused_optimizers=True)
+    assert fused.num_steps == 34 and _optimizer_kernels(fused) == {(True, None)}
+    fused.save_checkpoint(tmp_path / "fused.ckpt")
+    unfused = make_tiny_sold(max_steps=40)
+    fit_sold(unfused, tmp_path / "unfused", checkpoint=tmp_path / "fused.ckpt")
+    assert unfused.num_steps == 44 and _optimizer_kernels(unfused) == {(None, None)}
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a GPU")
+def test_fit_on_a_gpu_uses_fused_optimizers(tmp_path):
+    sold = make_tiny_sold(max_steps=20, save_replay_buffer=False)
+    fit_sold(sold, tmp_path, device="cuda")
+    assert sold.fused_optimizers and _optimizer_kernels(sold) == {(True, None)}
+
+
 def test_fit_without_saving_replay_buffer_and_with_finetuning(tmp_path):
     sold, logger = _fit(
         tmp_path,

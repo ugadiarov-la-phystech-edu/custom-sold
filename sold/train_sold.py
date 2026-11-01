@@ -269,7 +269,8 @@ class SOLDModule(OnlineModule):
         return reconstruction_loss(self.autoencoder, images, actions)
 
     def _adam(self, model_name: str, model: torch.nn.Module) -> torch.optim.Adam:
-        return torch.optim.Adam(model.parameters(), lr=self.optimizer_settings[model_name].learning_rate)
+        learning_rate = self.optimizer_settings[model_name].learning_rate
+        return torch.optim.Adam(model.parameters(), lr=learning_rate, fused=self.fused_optimizers or None)
 
     def _optimize(self, model_name: str, optimizer, loss: torch.Tensor) -> None:
         """One gradient step on loss, clipping the gradient norm to the model's grad_clip."""
@@ -474,7 +475,12 @@ def train(cfg: DictConfig):
     torch.set_float32_matmul_precision(cfg.float32_matmul_precision)
     sold = hydra.utils.instantiate(cfg.model)
     logger = hydra.utils.instantiate(cfg.logger.tensorboard)
-    sold.fit(logger, device=cfg.device, checkpoint=os.path.abspath(cfg.checkpoint) if cfg.checkpoint else None)
+    sold.fit(
+        logger,
+        device=cfg.device,
+        checkpoint=os.path.abspath(cfg.checkpoint) if cfg.checkpoint else None,
+        fused_optimizers=cfg.fused_optimizers,
+    )
 
     if cfg.logger.log_to_wandb:
         wandb.finish()

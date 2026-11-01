@@ -11,6 +11,7 @@ experiment: "my_experiment"
 seed: 42
 device: auto  # "cuda", "cpu" or "auto" (the GPU when there is one).
 float32_matmul_precision: high  # TF32 matmuls on GPUs; "highest" for full float32.
+fused_optimizers: null  # Fused Adam kernels: null uses them on GPUs.
 
 model:
   _target_: sold.train_sold.SOLDModule

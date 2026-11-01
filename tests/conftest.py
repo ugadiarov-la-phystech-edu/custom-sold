@@ -144,12 +144,15 @@ def read_metrics(log_dir):
     return [json.loads(line) for line in open(Path(log_dir) / "metrics" / "metrics.jsonl")]
 
 
-def fit_sold(module, tmp_path, checkpoint=None):
-    """Train a SOLD module on the CPU, logging under tmp_path/logs like configs/logger/sold.yaml; returns the writer."""
+def fit_sold(module, tmp_path, checkpoint=None, device="cpu", **fit_kwargs):
+    """Train a SOLD module, by default on the CPU, logging under tmp_path/logs (as configs/logger/sold.yaml does).
+
+    Returns the writer.
+    """
     from sold.utils.logging import MetricsWriter
 
     logger = MetricsWriter.create(str(tmp_path), name="logs")
-    module.fit(logger, device="cpu", checkpoint=checkpoint)
+    module.fit(logger, device=device, checkpoint=checkpoint, **fit_kwargs)
     return logger
 
 

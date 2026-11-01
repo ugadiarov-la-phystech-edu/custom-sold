@@ -133,6 +133,7 @@ class OnlineModule(nn.Module, ABC):
         self.num_episodes = -1  # Start at -1 to account for the initial reset.
         # Set up by fit().
         self.optimizers: list[Optimizer] = []
+        self.fused_optimizers = False  # Fused Adam kernels (configure_optimizers reads it).
         self.logger: MetricsWriter | None = None
         self.replay_buffer: RingBufferDataset | None = None
         self.progress = ProgressBar(max_steps)
@@ -163,9 +164,19 @@ class OnlineModule(nn.Module, ABC):
         """The optimizers whose states checkpoints store."""
 
     # ---------------------------------------------------------------------------------------------- training loop
-    def fit(self, logger: MetricsWriter, device: str | torch.device = "auto", checkpoint: str | None = None) -> None:
-        """Train for max_steps environment steps, logging to logger; checkpoint resumes a saved run."""
+    def fit(
+        self,
+        logger: MetricsWriter,
+        device: str | torch.device = "auto",
+        checkpoint: str | None = None,
+        fused_optimizers: bool | None = None,
+    ) -> None:
+        """Train for max_steps environment steps, logging to logger; checkpoint resumes a saved run.
+
+        fused_optimizers: fused optimizer kernels; None uses them on GPUs.
+        """
         self.to(resolve_device(device))
+        self.fused_optimizers = self.device.type == "cuda" if fused_optimizers is None else fused_optimizers
         self.train()
         self.logger = logger
         self.replay_buffer = RingBufferDataset(
@@ -363,7 +374,12 @@ class OnlineModule(nn.Module, ABC):
                 f"{len(self.optimizers)} optimizers (BUGS_AND_PITFALLS.md #17)."
             )
         for optimizer, state in zip(self.optimizers, checkpoint["optimizer_states"]):
-            optimizer.load_state_dict(state)
+            # Keep this run's kernel choice; loading moves the step counters to where fused kernels need them.
+            groups = [
+                {**saved, **{key: group[key] for key in ("fused", "foreach") if key in group}}
+                for saved, group in zip(state["param_groups"], optimizer.param_groups)
+            ]
+            optimizer.load_state_dict({**state, "param_groups": groups})
         self.load_counters(checkpoint)
 
         replay_buffer_path = Path(checkpoint["replay_buffer_path"]) if "replay_buffer_path" in checkpoint else None
