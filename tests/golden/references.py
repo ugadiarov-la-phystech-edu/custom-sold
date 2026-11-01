@@ -35,6 +35,8 @@ SAVI_CHECKPOINTS = {
 }
 SOLD_CHECKPOINT = "sold/reach_red/latest.ckpt"
 LEGACY_CHECKPOINT = DATA_DIR / "legacy_tiny_sold.ckpt"
+# The other imagination branch: start from every context window; dynamics learning draws num_context from a range.
+EVERY_START = dict(start_imagination_from_every=True, num_context=(1, 2))
 
 
 def _images(seed, batch=1, length=3, size=64):
@@ -109,17 +111,23 @@ def legacy_sold_outputs():
     return _sold_model_outputs(load_legacy_sold(), _images(3, length=4, size=16), num_context=2)
 
 
-def tiny_sold_losses():
-    """SOLD's losses for the tiny test model on a fixed batch (no optimizer steps)."""
-    from tests.conftest import make_tiny_sold
-
-    torch.manual_seed(0)
-    sold = make_tiny_sold()
+def _tiny_sold_batch(sold):
+    """A fixed batch for the tiny SOLD: images in [0, 1], actions and rewards NaN at the first step."""
     generator = torch.Generator().manual_seed(2)
     images = torch.rand(2, sold.sequence_length, 3, 16, 16, generator=generator)
     actions = torch.rand(2, sold.sequence_length, 2, generator=generator) * 2 - 1
     rewards = torch.rand(2, sold.sequence_length, generator=generator)
     actions[:, 0], rewards[:, 0] = float("nan"), float("nan")
+    return images, actions, rewards
+
+
+def tiny_sold_losses(**overrides):
+    """SOLD's losses for the tiny test model on a fixed batch (no optimizer steps)."""
+    from tests.conftest import make_tiny_sold
+
+    torch.manual_seed(0)
+    sold = make_tiny_sold(**overrides)
+    images, actions, rewards = _tiny_sold_batch(sold)
     torch.manual_seed(1)
     outputs = sold.autoencoder(images, actions[:, 1:])
     slots = outputs["slots"].detach()
@@ -137,6 +145,37 @@ def tiny_sold_losses():
         imagination.predicted_values_dist, imagination.lambda_returns, imagination.predicted_values_targ
     )
     return {key: torch.as_tensor(value).detach() for key, value in losses.items() if key.endswith("_loss")}
+
+
+def tiny_sold_gradients():
+    """Gradients in one training step of the tiny SOLD with fine-tuning (five optimizers) on a fixed batch.
+
+    step/<model>: the (clipped) gradients of each optimizer's parameters when it steps; after/<module>: every module's
+    gradients at the end of the step (zeros where none), which shows gradients reaching modules they should not.
+    """
+    from sold.train_sold import OPTIMIZED_MODELS
+    from tests.conftest import make_tiny_sold
+
+    def flat_gradients(parameters):
+        return torch.cat([(p.grad if p.grad is not None else torch.zeros_like(p)).flatten() for p in parameters])
+
+    torch.manual_seed(0)
+    sold = make_tiny_sold(finetune_autoencoder=True)
+    sold.optimizers = sold.configure_optimizers()
+    gradients = {}
+    for name, optimizer in zip(OPTIMIZED_MODELS, sold.optimizers):
+
+        def recording_step(*args, name=name, optimizer=optimizer, step=optimizer.step, **kwargs):
+            gradients[f"step/{name}"] = flat_gradients(p for group in optimizer.param_groups for p in group["params"])
+            return step(*args, **kwargs)
+
+        optimizer.step = recording_step
+    images, actions, rewards = _tiny_sold_batch(sold)
+    torch.manual_seed(1)
+    sold.training_step({"obs": images * 255, "action": actions, "reward": rewards})
+    names = ["autoencoder", "dynamics_predictor", "reward_predictor", "actor", "critic", "critic_target"]
+    gradients |= {f"after/{name}": flat_gradients(getattr(sold, name).parameters()) for name in names}
+    return {key: value.detach().clone() for key, value in gradients.items()}
 
 
 def tiny_sold_training():
@@ -161,6 +200,8 @@ def compute_all():
     references["sold_reach_red"] = sold_outputs(REPO_DIR / "checkpoints" / SOLD_CHECKPOINT)
     references["legacy_tiny_sold"] = legacy_sold_outputs()
     references["tiny_sold_losses"] = tiny_sold_losses()
+    references["tiny_sold_losses_every_start"] = tiny_sold_losses(**EVERY_START)
+    references["tiny_sold_gradients"] = tiny_sold_gradients()
     references["tiny_sold_training"] = tiny_sold_training()
     return references
 

@@ -175,4 +175,4 @@ cython_debug/
 /experiments
 /configs/local/default.yaml
 # Local settings for scripts/remote_test.sh.
-/scripts/remote_test.env
+/scripts/remote_test*.env

@@ -8,7 +8,7 @@
 #   scripts/remote_test.sh [PYTEST_ARGS...]           e.g. scripts/remote_test.sh -q --cov
 #   scripts/remote_test.sh --check [PYTEST_ARGS...]   all checks (scripts/check.sh)
 #
-# Settings come from the environment or scripts/remote_test.env (gitignored), e.g.:
+# Settings come from the environment or REMOTE_TEST_ENV (default scripts/remote_test.env, gitignored), e.g.:
 #   REMOTE_HOST=user@gpu-host           # required
 #   REMOTE_PORT=2222                    # default 22
 #   REMOTE_KEY=/path/to/private_key     # optional; a path on the jump host if REMOTE_JUMP is set
@@ -24,7 +24,8 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
-[[ -f "$REPO_DIR/scripts/remote_test.env" ]] && source "$REPO_DIR/scripts/remote_test.env"
+REMOTE_TEST_ENV="${REMOTE_TEST_ENV:-$REPO_DIR/scripts/remote_test.env}"
+[[ -f "$REMOTE_TEST_ENV" ]] && source "$REMOTE_TEST_ENV"
 
 : "${REMOTE_HOST:?set REMOTE_HOST (see the header of $0)}"
 : "${REMOTE_REPO:?set REMOTE_REPO (see the header of $0)}"

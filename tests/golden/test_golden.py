@@ -65,5 +65,13 @@ def test_tiny_sold_losses():
     _assert_matches("tiny_sold_losses", references.tiny_sold_losses())
 
 
+def test_tiny_sold_losses_every_start():
+    _assert_matches("tiny_sold_losses_every_start", references.tiny_sold_losses(**references.EVERY_START))
+
+
+def test_tiny_sold_gradients():
+    _assert_matches("tiny_sold_gradients", references.tiny_sold_gradients())
+
+
 def test_tiny_sold_training():
     _assert_matches("tiny_sold_training", references.tiny_sold_training())
