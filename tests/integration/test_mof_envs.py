@@ -1,6 +1,8 @@
 """The real multi_object_fetch environments through SOLD's wrapper stack (needs mujoco-py with rendering)."""
 
+import numpy as np
 import pytest
+import random
 from sold import envs
 from sold.envs.from_mof import VariableDistractorsWrapper
 import torch
@@ -54,3 +56,15 @@ def test_the_seed_makes_environments_reproducible():
         envs.make_env("mof", "PushRed_2to2Distractors_Dense-v1", (64, 64), 50, 2, seed=3).reset() for _ in range(2)
     ]
     assert torch.equal(first[0], first[1])
+
+
+# BUGS_AND_PITFALLS.md #40 (fixed in multi_object_fetch).
+def test_reset_frames_show_the_new_scene_when_environments_alternate():
+    """With one cached environment per number of distractors, each reset's frame must show that reset's scene."""
+    random.seed(0)  # Picks the number of distractors at each reset.
+    env = envs.make_env("mof", "PushRed_0to4Distractors_Dense-v1", (64, 64), 50, 2, seed=42)
+    for _ in range(10):
+        frame = env.reset()
+        rerendered = env.env.env.unwrapped.render(mode="rgb_array", size=(64, 64))
+        assert torch.equal(frame, torch.from_numpy(np.ascontiguousarray(np.moveaxis(rerendered, -1, 0))))
+    assert len(env.env.envs) > 1  # The resets alternated between environments.

@@ -60,6 +60,7 @@ A fix turns it into a strict `XPASS` failure, which is the cue to remove the mar
 | 37 | Pitfall (fixed) | Performance | The actor's bounds were copied to the GPU on every call |
 | 38 | Pitfall | Evaluation | `evaluate_sold.py` replays the scenes training started with |
 | 39 | Pitfall | Evaluation | Evaluation during training shares the environment with training |
+| 40 | Bug (fixed upstream) | Environments | The first frame of an episode can show an earlier scene |
 
 ---
 
@@ -552,3 +553,13 @@ This was already true before the fixes.
 - Evaluation also changes the global `random` state used to choose the number of distractors.
 
 **Possible fix:** a separate evaluation environment with its own seed, reset to a fixed seed before each evaluation so every checkpoint is scored on the same scenes.
+
+### 40. The first frame of an episode can show an earlier scene (fixed in multi_object_fetch)
+
+**Status:** fixed in multi-object-fetch-with-text (`e1c7408`, "Bind each simulation's offscreen buffer before rendering"); `tests/integration/test_mof_envs.py::test_reset_frames_show_the_new_scene_when_environments_alternate` guards it. Runs started with the environment cache (#12) and an older multi_object_fetch are affected, e.g. the PushRed run of 31 Oct; runs with the old code (a new environment per reset) are not.
+
+With several multi_object_fetch environments in one process, such as the one per number of distractors that `VariableDistractorsWrapper` caches (#12), the frame returned by `reset()` was often an earlier image of the same environment instead of the new scene: in 13 of 20 resets with `PushRed_0to4Distractors`, about half of them the last frame of that environment's previous episode. The scene itself was new (object positions and colors differ), and the frames after `step()` were correct; only the first render after another environment had rendered was stale.
+
+Cause, in mujoco_py 2.1: its EGL backend creates one OpenGL context per GPU, shared by all simulations, while each simulation's render context has its own offscreen framebuffer. `MjRenderContext.render` calls `mjr_render` without binding that framebuffer first (`mjr_setBuffer`), so it draws into the framebuffer of the simulation rendered last; `read_pixels` then reads the simulation's own framebuffer, which still holds its previous image, and leaves it bound, so the next render is correct. mujoco_py is unmaintained, so the fix is in `MultiObjectFetchEnv.render`, which binds the simulation's buffer before rendering.
+
+Effect on affected runs: many episodes start with a frame of another scene, so SAVi's first slots, the actor's first action and replay windows starting at step 0 see a wrong first frame (1 of 51 frames); evaluation episodes too. The same would hit any setup with several environments in one process, e.g. a separate evaluation environment (#39) or vectorized environments.
