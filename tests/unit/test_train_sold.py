@@ -341,5 +341,10 @@ def test_no_autoencoder_graph_without_finetuning(tmp_path, monkeypatch):
         return outputs
 
     monkeypatch.setattr(train_sold, "reconstruction_loss", recording)
-    fit_sold(make_tiny_sold(finetune_autoencoder=False, max_steps=15), tmp_path)
+    sold = make_tiny_sold(finetune_autoencoder=False, max_steps=15)
+    fit_sold(sold, tmp_path)
     assert recorded and not any(recorded)
+    # Nor do the dynamics model's image loss gradients accumulate in the frozen weights (under CUDA graphs, such
+    # never-reset gradients would point to memory that the next update's graphs overwrite).
+    assert all(not p.requires_grad and p.grad is None for p in sold.autoencoder.parameters())
+    assert any(p.grad is not None for p in sold.dynamics_predictor.parameters())

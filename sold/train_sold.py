@@ -132,6 +132,8 @@ class SOLDModule(OnlineModule):
             "slot_dim": autoencoder.slot_dim,
         }
         self.autoencoder = autoencoder
+        if not finetune_autoencoder:  # Its weights are never updated, so they collect no gradients.
+            self.autoencoder.requires_grad_(False)
         self.actor = actor(
             **regression_infos,
             output_dim=env.action_space.shape[0],
