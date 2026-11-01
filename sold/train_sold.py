@@ -64,6 +64,7 @@ class Imagination:
 
 class SOLDModule(OnlineModule):
     GRADIENT_NORMS = ("reward_predictor", "actor", "critic")
+    STAGES = ("autoencoder", "dynamics_loss", "reward_loss", "imagination", "actor_loss", "critic_loss")
 
     def __init__(
         self,
@@ -482,6 +483,8 @@ def train(cfg: DictConfig):
         device=cfg.device,
         checkpoint=os.path.abspath(cfg.checkpoint) if cfg.checkpoint else None,
         fused_optimizers=cfg.fused_optimizers,
+        compile_mode=cfg.compile.mode,
+        compile_stages=cfg.compile.stages,
     )
 
     if cfg.logger.log_to_wandb:

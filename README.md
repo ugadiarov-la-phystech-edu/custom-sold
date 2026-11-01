@@ -77,6 +77,14 @@ python train_sold.py preset=pick_red_finetune
 ```
 All results are stored in the [`experiments`](./experiments) directory.
 
+By default, the training stages are compiled with `torch.compile` and replayed as CUDA graphs, which makes the updates
+about three times faster on a GPU; the first update compiles for several minutes. To train without compiling (e.g. on a
+CPU, or to debug), run:
+```bash
+python train_sold.py compile.mode=null
+```
+`compile.mode=default` compiles without CUDA graphs; `compile.stages` limits it to some stages (see `SOLDModule.STAGES`).
+
 
 <details>
     <summary><i>Show sample training outputs</i></summary>

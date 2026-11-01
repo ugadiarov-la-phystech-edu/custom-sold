@@ -38,6 +38,7 @@ def sold_overrides(run_dir, savi_checkpoint, **values):
         f"logger.tensorboard.save_dir={run_dir}",
         "experiment=it",
         "device=cpu",
+        "compile.mode=null",  # Compiling on a CPU takes minutes; tests/unit/test_compile.py covers it.
         f"model.autoencoder.checkpoint_path={savi_checkpoint}",
         "model.max_steps=30",
         "model.num_seed=10",

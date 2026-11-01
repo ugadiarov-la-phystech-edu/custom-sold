@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 import gym
 import hydra
 import numpy as np
@@ -81,6 +82,7 @@ class OnlineModule(nn.Module, ABC):
     """Online RL training: collect experience with the policy, update from the replay buffer, evaluate, checkpoint."""
 
     GRADIENT_NORMS: tuple[str, ...] = ()  # Submodules whose gradient norms are logged after each round of updates.
+    STAGES: tuple[str, ...] = ()  # Training stages compile_stages can compile, as methods _<stage>_stage.
 
     def __init__(
         self,
@@ -134,6 +136,7 @@ class OnlineModule(nn.Module, ABC):
         # Set up by fit().
         self.optimizers: list[Optimizer] = []
         self.fused_optimizers = False  # Fused Adam kernels (configure_optimizers reads it).
+        self.cudagraphs = False  # Compiled stages replay CUDA graphs.
         self.logger: MetricsWriter | None = None
         self.replay_buffer: RingBufferDataset | None = None
         self.progress = ProgressBar(max_steps)
@@ -170,10 +173,13 @@ class OnlineModule(nn.Module, ABC):
         device: str | torch.device = "auto",
         checkpoint: str | None = None,
         fused_optimizers: bool | None = None,
+        compile_mode: str | None = None,
+        compile_stages: Sequence[str] | None = None,
     ) -> None:
         """Train for max_steps environment steps, logging to logger; checkpoint resumes a saved run.
 
-        fused_optimizers: fused optimizer kernels; None uses them on GPUs.
+        fused_optimizers: fused optimizer kernels; None uses them on GPUs. compile_mode: torch.compile mode of the
+        compile_stages (all STAGES if None); None trains eagerly.
         """
         self.to(resolve_device(device))
         self.fused_optimizers = self.device.type == "cuda" if fused_optimizers is None else fused_optimizers
@@ -185,6 +191,8 @@ class OnlineModule(nn.Module, ABC):
         self.optimizers = self.configure_optimizers()
         if checkpoint is not None:
             self.restore(torch.load(checkpoint, map_location=self.device, weights_only=False))
+        if compile_mode is not None:  # After moving and restoring: CUDA graphs keep the parameters' memory.
+            self.compile_stages(compile_mode, compile_stages)
         self.runner.done = True  # Start with a new episode.
         self.last_timings_log = (time.perf_counter(), self.num_steps)
 
@@ -238,11 +246,24 @@ class OnlineModule(nn.Module, ABC):
         outputs, device = None, self.device
         visualize, self.after_eval = self.after_eval, False
         for index, batch in enumerate(sample_batches(self.replay_buffer, self.num_updates, self.timings)):
+            if self.cudagraphs:  # The previous update's graph outputs may be overwritten from here on.
+                torch.compiler.cudagraph_mark_step_begin()
             with self.timings.measure("learn/training_step"):
                 batch = {key: value.to(device) for key, value in batch.items()}
                 outputs = self.training_step(batch, visualize=visualize and index == 0)
         if outputs is not None:
             self.log_round(outputs)
+
+    def compile_stages(self, mode: str, stages: Sequence[str] | None = None) -> None:
+        """Replace the _<stage>_stage methods of stages (all STAGES if None) by their torch.compile'd versions."""
+        stages = self.STAGES if stages is None else tuple(stages)
+        if unknown := set(stages) - set(self.STAGES):
+            raise ValueError(f"Unknown stages {sorted(unknown)}; expected some of {self.STAGES}.")
+        for stage in stages:
+            method = getattr(self, f"_{stage}_stage")
+            # fullgraph: a graph break raises instead of silently running eagerly.
+            setattr(self, f"_{stage}_stage", torch.compile(method, mode=mode, fullgraph=True, dynamic=False))
+        self.cudagraphs = mode in ("reduce-overhead", "max-autotune")
 
     def _policy(self, obs: torch.Tensor, is_first: bool, mode: str) -> torch.Tensor:
         # select_action reads last_action to encode the next observation.

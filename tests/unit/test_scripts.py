@@ -238,6 +238,12 @@ def test_presets_equal_the_overrides_of_the_training_scripts(preset, overrides):
         )
 
 
+def test_train_sold_compiles_with_cuda_graphs_by_default():
+    with initialize_config_dir(config_dir=str(CONFIGS_DIR), version_base=None):
+        cfg = compose("train_sold")
+    assert cfg.compile.mode == "reduce-overhead" and cfg.compile.stages is None
+
+
 # ---------------------------------------------------------------------------------- all scripts
 @pytest.mark.parametrize("environment", ["reach_red", "push_red", "pick_red"])
 def test_training_and_evaluation_share_the_environment_configs(environment):
