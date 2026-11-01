@@ -142,7 +142,10 @@ def tiny_sold_losses(**overrides):
         imagination.action_entropies,
     )
     losses |= sold.compute_critic_loss(
-        imagination.predicted_values_dist, imagination.lambda_returns, imagination.predicted_values_targ
+        imagination.imagined_slots,
+        imagination.num_context,
+        imagination.lambda_returns,
+        imagination.predicted_values_targ,
     )
     return {key: torch.as_tensor(value).detach() for key, value in losses.items() if key.endswith("_loss")}
 

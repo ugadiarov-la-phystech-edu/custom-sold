@@ -83,7 +83,7 @@ class Moments(nn.Module):
     ) -> None:
         super().__init__()
         self._decay = decay
-        self._max = torch.tensor(max_)
+        self._max = max_
         self._percentile_low = percentile_low
         self._percentile_high = percentile_high
         self.register_buffer("low", torch.zeros((), dtype=torch.float32))
@@ -92,7 +92,8 @@ class Moments(nn.Module):
     def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:
         low = torch.quantile(x.detach(), self._percentile_low)
         high = torch.quantile(x.detach(), self._percentile_high)
-        self.low = self._decay * self.low + (1 - self._decay) * low
-        self.high = self._decay * self.high + (1 - self._decay) * high
-        invscale = torch.max(1 / self._max, self.high - self.low)
-        return self.low.detach(), invscale.detach()
+        # In place, so that the buffers keep their memory (needed under CUDA graphs).
+        self.low.copy_(self._decay * self.low + (1 - self._decay) * low)
+        self.high.copy_(self._decay * self.high + (1 - self._decay) * high)
+        invscale = torch.clamp(self.high - self.low, min=1 / self._max)
+        return self.low.detach().clone(), invscale.detach()

@@ -15,7 +15,6 @@ from sold.utils.module import FreezeParameters
 from sold.utils.training import OnlineModule, print_summary, set_seed
 from sold.utils.visualizations import dynamics_figure, imagination_figures, reward_figures
 import torch
-import torch.distributions as D
 import torch.nn.functional as F
 from torch.nn.utils import clip_grad_norm_
 from torch.optim import Optimizer
@@ -56,7 +55,6 @@ class Imagination:
 
     lambda_returns: torch.Tensor  # (batch_size, horizon)
     predicted_values_targ: torch.Tensor  # Target critic's values, (batch_size, horizon).
-    predicted_values_dist: D.Distribution  # Critic's predictions, mean of shape (batch_size, horizon, 1).
     action_log_probs: torch.Tensor  # (batch_size, horizon)
     action_entropies: torch.Tensor  # (batch_size, horizon, 1)
     imagined_slots: torch.Tensor  # Context and imagined slots (detached), (batch_size, num_context + horizon, ...)
@@ -188,7 +186,7 @@ class SOLDModule(OnlineModule):
 
         # Without fine-tuning, the autoencoder forward pass needs no autograd graph.
         with self.measure_gpu("learn/autoencoder"), torch.set_grad_enabled(self.finetune_autoencoder):
-            reconstruction = reconstruction_loss(self.autoencoder, images, actions)
+            reconstruction = self._autoencoder_stage(images, actions)
         if self.finetune_autoencoder:
             self._optimize("autoencoder", autoencoder_optimizers[0], reconstruction["reconstruction_loss"])
 
@@ -227,7 +225,10 @@ class SOLDModule(OnlineModule):
         # Learn the critic.
         with self.measure_gpu("learn/critic_loss"):
             outputs |= self.compute_critic_loss(
-                imagination.predicted_values_dist, imagination.lambda_returns, imagination.predicted_values_targ
+                imagination.imagined_slots,
+                imagination.num_context,
+                imagination.lambda_returns,
+                imagination.predicted_values_targ,
             )
         self._optimize("critic", critic_optimizer, outputs["critic_loss"])
 
@@ -264,6 +265,9 @@ class SOLDModule(OnlineModule):
         for name, image in figures.items():
             self.log_image(name, image)
 
+    def _autoencoder_stage(self, images: torch.Tensor, actions: torch.Tensor) -> dict[str, Any]:
+        return reconstruction_loss(self.autoencoder, images, actions)
+
     def _adam(self, model_name: str, model: torch.nn.Module) -> torch.optim.Adam:
         return torch.optim.Adam(model.parameters(), lr=self.optimizer_settings[model_name].learning_rate)
 
@@ -277,11 +281,19 @@ class SOLDModule(OnlineModule):
                 clip_grad_norm_([param for group in optimizer.param_groups for param in group["params"]], grad_clip)
             optimizer.step()
 
+    def sample_num_context(self) -> int:
+        return torch.randint(self.min_num_context, self.max_num_context + 1, (1,)).item()
+
+    # Each training stage is a public method that switches module modes, freezes parameters and draws num_context,
+    # around a _<stage>_stage method of tensors only, which compile_stages can replace by its compiled version.
     def compute_dynamics_loss(self, images: torch.Tensor, slots: torch.Tensor, actions: torch.Tensor) -> dict[str, Any]:
         self.dynamics_predictor.train()
-        batch_size, sequence_length, num_slots, slot_dim = slots.size()
-        num_context = torch.randint(self.min_num_context, self.max_num_context + 1, (1,)).item()
+        num_context = self.sample_num_context()
+        return self._dynamics_loss_stage(images, slots, actions, num_context) | {"num_context": num_context}
 
+    def _dynamics_loss_stage(
+        self, images: torch.Tensor, slots: torch.Tensor, actions: torch.Tensor, num_context: int
+    ) -> dict[str, Any]:
         future_slots = self.dynamics_predictor.predict_slots(
             slots, actions[:, 1:].clone().detach(), steps=self.imagination_horizon, num_context=num_context
         )
@@ -297,13 +309,15 @@ class SOLDModule(OnlineModule):
             "slot_loss": slot_loss,
             "image_loss": image_loss,
             "dynamics_loss": slot_loss + image_loss,
-            "num_context": num_context,
             "predicted_outputs": predicted_outputs,
         }
 
     def compute_reward_loss(
         self, images: torch.Tensor, reconstructions: torch.Tensor, slots: torch.Tensor, rewards: torch.Tensor
     ) -> dict[str, Any]:
+        return self._reward_loss_stage(slots, rewards)
+
+    def _reward_loss_stage(self, slots: torch.Tensor, rewards: torch.Tensor) -> dict[str, Any]:
         is_firsts = torch.isnan(rewards)  # We add NaN as a reward on the first time-step.
         predicted_rewards_dist = self.reward_predictor(slots.detach())
         log_probs = predicted_rewards_dist.log_prob(torch.nan_to_num(rewards).unsqueeze(2))
@@ -322,11 +336,15 @@ class SOLDModule(OnlineModule):
 
     def imagine_ahead(self, slots: torch.Tensor, actions: torch.Tensor) -> Imagination:
         self.dynamics_predictor.eval()
-        batch_size, sequence_length, num_slots, slot_dim = slots.size()
-        action_log_probs, action_entropies = [], []
+        num_context = self.max_num_context if self.start_imagination_from_every else self.sample_num_context()
+        # Only the actor (and through the imagined slots the dynamics model) gets gradients.
+        with FreezeParameters([self.reward_predictor, self.critic]):
+            outputs = self._imagination_stage(slots, actions, num_context)
+        return Imagination(**outputs, num_context=num_context)
 
+    def _imagination_stage(self, slots: torch.Tensor, actions: torch.Tensor, num_context: int) -> dict[str, Any]:
+        action_log_probs, action_entropies = [], []
         if self.start_imagination_from_every:
-            num_context = self.max_num_context
             slots_context = (
                 slots.unfold(dimension=1, size=self.max_num_context, step=1).flatten(end_dim=1).permute(0, 3, 1, 2)
             )
@@ -336,52 +354,43 @@ class SOLDModule(OnlineModule):
                 .permute(0, 2, 1)[:, 1:]
             )
         else:
-            num_context = torch.randint(self.min_num_context, self.max_num_context + 1, (1,)).item()
             slots_context = slots[:, :num_context].detach()
             actions_context = actions[:, 1:num_context].detach()
 
-        # Actor update
-        # Freeze models except action model and imagine next states
-        with FreezeParameters([self.reward_predictor, self.critic]):
-            for _ in range(self.imagination_horizon):
-                action_dist = self.actor(slots_context.detach(), start=slots_context.shape[1] - 1)
-                selected_action = action_dist.rsample().squeeze(1)
-                actions_context = torch.cat([actions_context, selected_action.unsqueeze(1)], dim=1)
-                action_log_probs.append(action_dist.log_prob(selected_action.unsqueeze(1)))
-                action_entropies.append(action_dist.entropy())
+        for _ in range(self.imagination_horizon):
+            action_dist = self.actor(slots_context.detach(), start=slots_context.shape[1] - 1)
+            selected_action = action_dist.rsample().squeeze(1)
+            actions_context = torch.cat([actions_context, selected_action.unsqueeze(1)], dim=1)
+            action_log_probs.append(action_dist.log_prob(selected_action.unsqueeze(1)))
+            action_entropies.append(action_dist.entropy())
 
-                predicted_slots = self.dynamics_predictor.predict_slots(
-                    slots_context, actions_context, steps=1, num_context=slots_context.shape[1]
-                )
-                slots_context = torch.cat([slots_context, predicted_slots], dim=1)
+            predicted_slots = self.dynamics_predictor.predict_slots(
+                slots_context, actions_context, steps=1, num_context=slots_context.shape[1]
+            )
+            slots_context = torch.cat([slots_context, predicted_slots], dim=1)
 
-        with FreezeParameters([self.reward_predictor, self.critic]):
-            predicted_rewards = self.reward_predictor(slots_context, start=num_context).mean.squeeze(-1)
-            predicted_values = self.critic(slots_context, start=num_context).mean.squeeze(-1)
-
-        lambda_returns = self.compute_lambda_returns(predicted_rewards, predicted_values)
-
-        action_log_probs = torch.stack(action_log_probs, dim=1).squeeze(2)
-        action_entropies = torch.stack(action_entropies, dim=1)
-
-        # Value update
+        predicted_rewards = self.reward_predictor(slots_context, start=num_context).mean.squeeze(-1)
+        predicted_values = self.critic(slots_context, start=num_context).mean.squeeze(-1)
         slots_context = slots_context.detach()
-        # Predict imagined values
-        predicted_values_targ = self.critic_target(slots_context[:, :-1], start=num_context - 1).mean.squeeze(-1)
-        predicted_values_dist = self.critic(slots_context[:, :-1], start=num_context - 1)
-
-        return Imagination(
-            lambda_returns,
-            predicted_values_targ,
-            predicted_values_dist,
-            action_log_probs,
-            action_entropies,
-            slots_context,
-            num_context,
-            predicted_rewards.detach(),
-        )
+        return {
+            "lambda_returns": self.compute_lambda_returns(predicted_rewards, predicted_values),
+            "predicted_values_targ": self.critic_target(slots_context[:, :-1], start=num_context - 1).mean.squeeze(-1),
+            "action_log_probs": torch.stack(action_log_probs, dim=1).squeeze(2),
+            "action_entropies": torch.stack(action_entropies, dim=1),
+            "imagined_slots": slots_context,
+            "predicted_rewards": predicted_rewards.detach(),
+        }
 
     def compute_actor_loss(
+        self,
+        lambda_returns: torch.Tensor,
+        predicted_values_targ: torch.Tensor,
+        action_log_probs: torch.Tensor,
+        action_entropies: torch.Tensor,
+    ) -> dict[str, Any]:
+        return self._actor_loss_stage(lambda_returns, predicted_values_targ, action_log_probs, action_entropies)
+
+    def _actor_loss_stage(
         self,
         lambda_returns: torch.Tensor,
         predicted_values_targ: torch.Tensor,
@@ -402,10 +411,23 @@ class SOLDModule(OnlineModule):
         )
 
     def compute_critic_loss(
-        self, predicted_values_dist: D.Distribution, lambda_returns: torch.Tensor, predicted_values_targ: torch.Tensor
+        self,
+        imagined_slots: torch.Tensor,
+        num_context: int,
+        lambda_returns: torch.Tensor,
+        predicted_values_targ: torch.Tensor,
+    ) -> dict[str, Any]:
+        return self._critic_loss_stage(imagined_slots, num_context, lambda_returns, predicted_values_targ)
+
+    def _critic_loss_stage(
+        self,
+        imagined_slots: torch.Tensor,
+        num_context: int,
+        lambda_returns: torch.Tensor,
+        predicted_values_targ: torch.Tensor,
     ) -> dict[str, Any]:
         return rl.losses.critic_loss(
-            predicted_values_dist,
+            self.critic(imagined_slots[:, :-1], start=num_context - 1),
             lambda_returns,
             predicted_values_targ,
             self.discounts,

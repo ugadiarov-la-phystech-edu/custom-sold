@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 from sold import rl
 from sold.modeling.autoencoder.losses import reconstruction_loss
-from sold.modeling.distributions import TwoHotEncodingDistribution
 from sold.train_sold import OptimizerSettings, SOLDModule, optimization_settings
 from tests import fakes
 from tests.conftest import fit_sold, make_tiny_sold, tiny_sold_kwargs
@@ -141,9 +140,11 @@ def test_compute_actor_loss_normalizes_with_the_return_moments(gradients):
 @pytest.mark.parametrize("overrides, weight", [({}, 0.1), ({"critic_regularization_weight": 0.5}, 0.5)])
 def test_compute_critic_loss_uses_the_configured_regularization_weight(overrides, weight):
     sold = make_tiny_sold(**overrides)  # The value hard-coded before it was configurable.
-    dist = TwoHotEncodingDistribution(torch.randn(2, 3, 255), dims=1)
-    returns, targets = torch.randn(2, 3), torch.randn(2, 3)
-    losses = sold.compute_critic_loss(dist, returns, targets)
+    imagined_slots, returns, targets = torch.randn(2, 5, 2, 8), torch.randn(2, 3), torch.randn(2, 3)
+    losses = sold.compute_critic_loss(imagined_slots, 2, returns, targets)
+    # The critic predicts values from the context's last step on, for all but the last imagined step.
+    dist = sold.critic(imagined_slots[:, :-1], start=1)
+    assert dist.mean.shape == (2, 3, 1)
     expected = rl.losses.critic_loss(dist, returns, targets, sold.discounts, weight)
     assert losses.keys() == expected.keys()
     assert all(torch.allclose(torch.as_tensor(losses[k]), torch.as_tensor(expected[k])) for k in losses)
@@ -182,7 +183,7 @@ def test_imagine_ahead_shapes(from_every):
     assert returns.shape == imagination.predicted_values_targ.shape == imagination.action_log_probs.shape == (batch, 3)
     # The entropies broadcast against the discounts (1, 3) in the actor loss (BUGS_AND_PITFALLS.md #26).
     assert imagination.action_entropies.shape == (batch, 3, 1)
-    assert imagination.predicted_values_dist.mean.shape == (batch, 3, 1)
+    assert imagination.imagined_slots.shape == (batch, 2 + 3, 2, 8) and not imagination.imagined_slots.requires_grad
     assert not sold.dynamics_predictor.training
     assert all(p.requires_grad for p in sold.critic.parameters())  # Unfrozen again.
     returns.mean().backward()
