@@ -7,8 +7,12 @@ import torch.nn as nn
 class Decoder(nn.Module, ABC):
     def __init__(self, image_size: tuple[int, int], out_channels: int) -> None:
         super().__init__()
-        self.image_size = image_size
+        self.image_size = tuple(image_size)  # Not an OmegaConf list, which torch.compile cannot trace.
         self.out_channels = out_channels
+
+    def __setstate__(self, state: dict) -> None:
+        super().__setstate__(state)
+        self.image_size = tuple(self.image_size)  # Checkpoints pickled before this kept the OmegaConf list.
 
     @abstractmethod
     def forward(self, slots: torch.Tensor) -> torch.Tensor:
@@ -28,7 +32,6 @@ class CnnDecoder(Decoder):
         assert len(num_channels) == len(kernel_sizes) == len(strides), (
             "num_channels, kernel_sizes, and strides must have the same length"
         )
-        self.image_size = image_size
         self.feature_map_size = torch.LongTensor(image_size)
         for stride in strides:
             self.feature_map_size //= stride

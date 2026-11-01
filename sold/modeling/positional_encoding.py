@@ -101,9 +101,8 @@ class SinusoidalPositionalEncoding(nn.Module):
         pe = torch.zeros(max_len, 1, d_model)
         pe[:, 0, 0::2] = torch.sin(position * div_term)
         pe[:, 0, 1::2] = torch.cos(position * div_term)
-        pe = pe.view(1, max_len, 1, d_model)
-        self.pe = pe
-        return
+        # Non-persistent: follows the module's device, without a state-dict key (none in older checkpoints).
+        self.register_buffer("pe", pe.view(1, max_len, 1, d_model), persistent=False)
 
     def forward(self, x, batch_size, num_slots):
         """
@@ -119,8 +118,6 @@ class SinusoidalPositionalEncoding(nn.Module):
             Number of slots to repear the positional encoder for
         """
 
-        if x.device != self.pe.device:
-            self.pe = self.pe.to(x.device)
         cur_seq_len = x.shape[1]
         cur_pe = self.pe.repeat(batch_size, 1, num_slots, 1)[:, :cur_seq_len]
         x = x + cur_pe

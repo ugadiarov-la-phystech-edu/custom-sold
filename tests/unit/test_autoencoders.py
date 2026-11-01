@@ -4,6 +4,7 @@ import functools
 import hydra
 from omegaconf import OmegaConf
 import os
+import pickle
 import pytest
 from sold.modeling.autoencoder.base import Autoencoder
 from sold.modeling.autoencoder.cnn import CnnDecoder, CnnEncoder
@@ -142,6 +143,22 @@ def test_savi_encoder_and_decoder_shapes():
     assert rgbs.min() >= 0 and rgbs.max() <= 1
     with pytest.raises(ValueError, match="slot dimension"):
         decoder(torch.randn(2, 3, 4))
+
+
+@pytest.mark.parametrize(
+    "make_decoder",
+    [
+        lambda image_size: SaviCnnDecoder(image_size, [4], [3], [1], in_channels=5),
+        lambda image_size: CnnDecoder(10, image_size, [6, 4], [4, 4], [2, 2]),
+    ],
+    ids=["savi", "cnn"],
+)
+def test_decoders_keep_the_image_size_as_a_tuple(make_decoder):
+    # Hydra passes OmegaConf lists, which torch.compile cannot unpack.
+    decoder = make_decoder(OmegaConf.create([8, 8]))
+    assert decoder.image_size == (8, 8) and isinstance(decoder.image_size, tuple)
+    decoder.image_size = OmegaConf.create([8, 8])  # As in modules pickled into older checkpoints.
+    assert pickle.loads(pickle.dumps(decoder)).image_size == (8, 8)
 
 
 def test_corrector_iterations_and_attention():

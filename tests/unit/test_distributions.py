@@ -1,5 +1,5 @@
 import pytest
-from sold.modeling.distributions import Moments, TwoHotEncodingDistribution, symexp, symlog
+from sold.modeling.distributions import Moments, TwoHotEncodingDistribution, quantile, symexp, symlog
 import torch
 import torch.nn.functional as F
 
@@ -94,3 +94,10 @@ def test_two_hot_mean_is_the_expectation_over_symexp_bins():
     dist = TwoHotEncodingDistribution(logits, dims=1)
     expected = (dist.probs * symexp(dist.bins)).sum(-1, keepdim=True)  # Paper Eq. 5.
     assert torch.allclose(dist.mean, expected, atol=1e-5)
+
+
+@pytest.mark.parametrize("shape", [(1,), (2,), (7,), (45,), (8, 14), (1000,)])
+@pytest.mark.parametrize("q", [0.0, 0.05, 0.5, 0.95, 1.0])
+def test_quantile_equals_torch_quantile(shape, q):
+    x = torch.randn(shape, generator=torch.Generator().manual_seed(len(shape) * 1000 + shape[0]))
+    assert torch.allclose(quantile(x, q), torch.quantile(x, q), rtol=1e-6, atol=1e-7)

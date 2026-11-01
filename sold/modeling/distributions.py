@@ -1,4 +1,5 @@
 from collections.abc import Callable
+import math
 import torch
 from torch import Tensor
 import torch.nn as nn
@@ -69,6 +70,18 @@ class TwoHotEncodingDistribution:
         return (target * log_pred).sum(dim=self.dims)
 
 
+def quantile(x: Tensor, q: float) -> Tensor:
+    """torch.quantile(x, q) with linear interpolation, but traceable by torch.compile.
+
+    torch.quantile checks its input for NaNs, which torch.compile cannot trace; here NaNs are sorted last instead.
+    The rank is a Python float (torch.quantile's is float32), which only changes the interpolation weight's last bits.
+    """
+    values = x.flatten().sort().values
+    rank = q * (values.numel() - 1)
+    below, above = math.floor(rank), math.ceil(rank)
+    return torch.lerp(values[below], values[above], rank - below)
+
+
 # Adapted from: https://github.com/Eclectic-Sheep/sheeprl/blob/c37a39eb4fdc3cb3df92890a39c60545cc451a82/sheeprl/algos/dreamer_v3/utils.py#L40
 class Moments(nn.Module):
     low: Tensor  # Running percentiles (buffers).
@@ -90,8 +103,8 @@ class Moments(nn.Module):
         self.register_buffer("high", torch.zeros((), dtype=torch.float32))
 
     def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:
-        low = torch.quantile(x.detach(), self._percentile_low)
-        high = torch.quantile(x.detach(), self._percentile_high)
+        low = quantile(x.detach(), self._percentile_low)
+        high = quantile(x.detach(), self._percentile_high)
         # In place, so that the buffers keep their memory (needed under CUDA graphs).
         self.low.copy_(self._decay * self.low + (1 - self._decay) * low)
         self.high.copy_(self._decay * self.high + (1 - self._decay) * high)

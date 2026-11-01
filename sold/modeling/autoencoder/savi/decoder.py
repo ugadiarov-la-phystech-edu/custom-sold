@@ -27,9 +27,13 @@ class SaviCnnDecoder(CnnEncoder):
             ],
             in_channels,
         )  # Add final convolutional layer projecting to RGB + mask.
-        self.image_size = image_size
+        self.image_size = tuple(image_size)  # Not an OmegaConf list, which torch.compile cannot trace.
         self.slot_dim = in_channels
         self.positional_embedding = ImagePositionalEmbedding(feature_dim=in_channels, image_size=image_size)
+
+    def __setstate__(self, state: dict) -> None:
+        super().__setstate__(state)
+        self.image_size = tuple(self.image_size)  # Checkpoints pickled before this kept the OmegaConf list.
 
     def forward(self, slots: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         batch_size, num_slots, slot_dim = slots.size()

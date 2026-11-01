@@ -62,9 +62,10 @@ def test_sinusoidal_positional_encoding_per_time_step():
     assert torch.allclose(out[1, :, 2], _sinusoid(5, 6)[:3], atol=1e-5)
 
 
-def test_sinusoidal_positional_encoding_follows_input_device():
-    # 'pe' is a plain attribute, not a buffer, so it is moved lazily to the input's device.
+def test_sinusoidal_positional_encoding_follows_the_module_device():
+    # 'pe' is a non-persistent buffer: it moves with the module and has no state-dict key.
     encoding = SinusoidalPositionalEncoding(d_model=4, dropout=0.0, max_len=3)
+    encoding.to("meta")
     out = encoding(torch.zeros(1, 2, 1, 4, device="meta"), batch_size=1, num_slots=1)
     assert encoding.pe.device.type == "meta"
     assert out.shape == (1, 2, 1, 4)
