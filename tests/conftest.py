@@ -45,6 +45,25 @@ def require_checkpoint(relative_path: str) -> Path:
     return path
 
 
+# ------------------------------------------------------------------------------------ compiling
+@pytest.fixture
+def eager_randomness(monkeypatch):
+    """Compiled code draws the same random numbers as eager code (dropout, rsample), so their results compare."""
+    torch._dynamo.reset()
+    monkeypatch.setattr(torch._inductor.config, "fallback_random", True)
+    yield
+    torch._dynamo.reset()
+
+
+@pytest.fixture
+def aot_eager(monkeypatch):
+    """Compile with the aot_eager backend: dynamo and AOTAutograd as in production (graph breaks, recompiles,
+    autograd), with eager kernels instead of Inductor's, which take minutes to build on a CPU. GPU tests cover Inductor
+    and CUDA graphs."""
+    compile = torch.compile
+    monkeypatch.setattr(torch, "compile", lambda fn, mode=None, **kwargs: compile(fn, backend="aot_eager", **kwargs))
+
+
 # ------------------------------------------------------------------------------- tiny models
 def make_tiny_savi(image_size=(16, 16), num_slots=2, slot_dim=8, action_dim=2, action_conditional=False):
     """A SAVi with the same structure as configs/autoencoder/savi.yaml, at toy size."""

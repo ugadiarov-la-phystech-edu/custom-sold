@@ -6,14 +6,7 @@ from tests.conftest import fit_sold, make_tiny_sold, read_metrics
 from tests.golden import references
 import torch
 
-
-@pytest.fixture(autouse=True)
-def eager_randomness(monkeypatch):
-    """Compiled code draws the same random numbers as eager code (dropout, rsample), so their results compare."""
-    torch._dynamo.reset()
-    monkeypatch.setattr(torch._inductor.config, "fallback_random", True)
-    yield
-    torch._dynamo.reset()
+pytestmark = pytest.mark.usefixtures("eager_randomness")
 
 
 def _steps(sold, num_steps, device="cpu"):
@@ -46,15 +39,6 @@ def _assert_same_training(actual, expected):
     for step, (losses, reference) in enumerate(zip(actual_losses, expected_losses)):
         for key in reference:
             assert torch.allclose(losses[key], reference[key], rtol=1e-3, atol=1e-5), f"step {step}: {key}"
-
-
-@pytest.fixture
-def aot_eager(monkeypatch):
-    """Compile with the aot_eager backend: dynamo and AOTAutograd as in production (graph breaks, recompiles,
-    autograd), with eager kernels instead of Inductor's, which take minutes to build on a CPU. The GPU tests below
-    cover Inductor and CUDA graphs."""
-    compile = torch.compile
-    monkeypatch.setattr(torch, "compile", lambda fn, mode=None, **kwargs: compile(fn, backend="aot_eager", **kwargs))
 
 
 @pytest.mark.parametrize(
