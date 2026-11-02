@@ -85,6 +85,14 @@ python train_sold.py compile.mode=null
 ```
 `compile.mode=default` compiles without CUDA graphs; `compile.stages` limits it to some stages (see `SOLDModule.STAGES`).
 
+Several environments can be stepped in parallel, each in its own process, with batched action selection:
+```bash
+python train_sold.py preset=push_red num_envs=8
+```
+The number of updates per environment step stays the same, so runs remain comparable. The environments' episodes must
+end together (multi_object_fetch episodes always last `max_episode_steps`). Evaluation runs at the first episode end after
+each `eval_freq` env steps, which with N environments can be up to `N * max_episode_steps` later.
+
 
 <details>
     <summary><i>Show sample training outputs</i></summary>

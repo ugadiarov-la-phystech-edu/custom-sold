@@ -545,8 +545,8 @@ A related trap: each distractor variant is seeded with `seed + number of distrac
 
 ### 39. Evaluation during training shares the environment with training
 
-`OnlineModule.play_episode` (`sold/utils/training.py:212-218`) runs evaluation episodes, and the three logged training episodes, on `self.env`, the same environment used to collect training data (`:162, 170`).
-This was already true before the fixes.
+`OnlineModule.eval_loop` runs evaluation episodes, and the three logged training episodes, on `self.env`, the same environment used to collect training data.
+This was already true before the fixes. With `num_envs > 1` it is the same: evaluation plays its episodes on the training environments, in batches of `num_envs`.
 
 - Evaluation episodes advance the same random generators as training, so the evaluation scenes differ from checkpoint to checkpoint. Success rates of different checkpoints are measured on different scenes, which adds noise to the learning curve.
 - Whether evaluation runs (`eval_freq`, `num_eval_episodes`) changes the sequence of training scenes, so changing evaluation settings changes training even with the same seed.
