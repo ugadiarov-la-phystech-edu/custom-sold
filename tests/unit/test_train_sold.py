@@ -248,16 +248,41 @@ def test_training_step_logs_figures_only_after_evaluation(tiny_sold, monkeypatch
 def test_select_action_modes(tiny_sold):
     obs = torch.randint(0, 255, (1, 3, 16, 16), dtype=torch.uint8)  # A batch of one environment.
     random_action = tiny_sold.select_action(obs, is_first=True, mode="random")
-    assert random_action.shape == (1, 2) and tiny_sold._slot_history.shape == (1, 1, 2, 8)
+    # The slot history is a buffer of max_episode_steps (8) steps, filled up to _step.
+    assert random_action.shape == (1, 2) and tiny_sold._slot_history.shape == (1, 8, 2, 8) and tiny_sold._step == 1
     train_action = tiny_sold.select_action(obs, mode="train")
-    assert tiny_sold._slot_history.shape == (1, 2, 2, 8)
+    assert tiny_sold._step == 2 and tiny_sold._slot_history[:, 2:].abs().sum() == 0
     eval_a = tiny_sold.select_action(obs, is_first=True, mode="eval")
     eval_b = tiny_sold.select_action(obs, is_first=True, mode="eval")
-    assert torch.equal(eval_a, eval_b) and tiny_sold._slot_history.shape == (1, 1, 2, 8)
+    assert torch.equal(eval_a, eval_b) and tiny_sold._step == 1
     for action in (random_action, train_action, eval_a):
         assert action.abs().max() <= 1.0 and not action.requires_grad
     with pytest.raises(ValueError, match="Invalid mode"):
         tiny_sold.select_action(obs, mode="greedy")
+
+
+def test_actor_reads_one_step_of_a_padded_history_like_the_growing_history(tiny_sold):
+    slots = torch.randn(2, 8, 2, 8)
+    for t in range(8):
+        grown = tiny_sold.actor(slots[:, : t + 1], start=t)
+        padded = torch.zeros_like(slots)
+        padded[:, : t + 1] = slots[:, : t + 1]
+        indexed = tiny_sold.actor(padded, index=torch.tensor([t]))
+        assert torch.allclose(indexed.mean, grown.mean, atol=1e-6)
+        assert torch.allclose(indexed.base_dist.stddev, grown.base_dist.stddev, atol=1e-6)
+
+
+def test_batched_action_selection_equals_one_environment_at_a_time():
+    torch.manual_seed(0)
+    batched = make_tiny_sold(fakes.FakeBatchEnv(3))
+    torch.manual_seed(0)
+    single = make_tiny_sold()
+    obs = torch.randint(0, 255, (4, 3, 3, 16, 16), dtype=torch.uint8)  # 4 steps of 3 environments.
+    batched_actions = [batched._policy(obs[t], is_first=t == 0, mode="eval").clone() for t in range(4)]
+    for env_index in range(3):
+        for t in range(4):
+            action = single._policy(obs[t, env_index : env_index + 1], is_first=t == 0, mode="eval")
+            assert torch.allclose(action, batched_actions[t][env_index : env_index + 1], atol=1e-5)
 
 
 def test_select_action_clamps_with_first_dimension_bounds():

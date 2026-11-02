@@ -68,8 +68,9 @@ class Predictor(nn.Module):
         self.mlp.append(nn.Linear(hidden_dim, output_dim))
         self.mlp = nn.Sequential(*self.mlp)
 
-    def forward(self, slots: torch.Tensor, start: int = 0) -> torch.Tensor:
-        features = self.slot_aggregation_transformer(slots, start=start)
+    def forward(self, slots: torch.Tensor, start: int = 0, index: torch.Tensor | None = None) -> torch.Tensor:
+        """Predictions from time step start on, or only for time step index (see SlotAggregationTransformer)."""
+        features = self.slot_aggregation_transformer(slots, start=start, index=index)
         return self.mlp(features)
 
 
@@ -145,8 +146,8 @@ class GaussianPredictor(Predictor):
         self.register_buffer("lower_bound", torch.as_tensor(lower_bound, dtype=torch.float32), persistent=False)
         self.register_buffer("upper_bound", torch.as_tensor(upper_bound, dtype=torch.float32), persistent=False)
 
-    def forward(self, slots: torch.Tensor, start: int = 0) -> D.Distribution:
-        x = super().forward(slots, start=start)
+    def forward(self, slots: torch.Tensor, start: int = 0, index: torch.Tensor | None = None) -> D.Distribution:
+        x = super().forward(slots, start=start, index=index)
         mean_, std_ = x.chunk(2, -1)
         mean_ = torch.clamp(mean_, self.lower_bound, self.upper_bound)
         std = (self.max_std - self.min_std) * torch.sigmoid(std_ + self.init_std) + self.min_std

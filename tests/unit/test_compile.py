@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import pytest
+from tests import fakes
 from tests.conftest import fit_sold, make_tiny_sold, read_metrics
 from tests.golden import references
 import torch
@@ -83,13 +84,63 @@ def test_fit_with_compiled_stages_keeps_checkpoints_compatible(tmp_path, aot_eag
     assert eager.num_steps > 20 and "_critic_loss_stage" not in vars(eager)
 
 
-def test_updates_mark_cuda_graph_steps(tmp_path, monkeypatch):
-    marks = []
+def test_updates_and_action_selection_mark_cuda_graph_steps(tmp_path, monkeypatch):
+    marks, selections = [], []
     monkeypatch.setattr(torch.compiler, "cudagraph_mark_step_begin", lambda: marks.append(True))
     sold = make_tiny_sold(max_steps=20, num_updates=2, save_replay_buffer=False)
     sold.cudagraphs = True  # As compile_stages sets it for CUDA-graph modes; the stages stay eager here.
+    select_action = sold.select_action
+
+    def counting_select_action(*args, **kwargs):
+        selections.append(1)
+        return select_action(*args, **kwargs)
+
+    monkeypatch.setattr(sold, "select_action", counting_select_action)
     fit_sold(sold, tmp_path)
-    assert len(marks) == 2 * 2  # Two rounds of two updates after the seed steps (10, then 5 + 5 steps).
+    # Two rounds of two updates after the seed steps (10, then 5 + 5 steps), and every action selection.
+    assert len(marks) == 2 * 2 + len(selections) and selections
+
+
+def _episodes_of_actions(sold, obs, mode, episodes=1):
+    """The actions of whole episodes (steps along obs's first dimension) chosen by sold._policy."""
+    actions = []
+    for _ in range(episodes):
+        torch.manual_seed(0)
+        actions += [sold._policy(obs[t], is_first=t == 0, mode=mode).clone() for t in range(obs.shape[0])]
+    return actions
+
+
+def _two_environment_models(device="cpu"):
+    torch.manual_seed(0)
+    eager = make_tiny_sold(fakes.FakeBatchEnv(2)).to(device)
+    torch.manual_seed(0)
+    return eager, make_tiny_sold(fakes.FakeBatchEnv(2)).to(device)
+
+
+@pytest.mark.parametrize("mode", ["eval", "train"])
+def test_compiled_action_selection_equals_eager(mode, monkeypatch, aot_eager):
+    eager, compiled = _two_environment_models()
+    compiled.compile_stages("default", ["encode", "act"])
+    obs = torch.randint(0, 255, (8, 2, 3, 16, 16), dtype=torch.uint8)  # A whole episode of two environments.
+    expected = _episodes_of_actions(eager, obs, mode)
+    _episodes_of_actions(compiled, obs, mode)  # Compiles: one graph for the first step's encoding, one for the rest.
+    monkeypatch.setattr(torch._dynamo.config, "error_on_recompile", True)
+    for actual, reference in zip(_episodes_of_actions(compiled, obs, mode), expected):
+        assert torch.allclose(actual, reference, atol=1e-5)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a GPU")
+def test_cuda_graph_action_selection_equals_eager():
+    from torch._dynamo.utils import counters
+
+    eager, graphed = _two_environment_models("cuda")
+    graphed.compile_stages("reduce-overhead", ["encode", "act"])
+    obs = torch.randint(0, 255, (8, 2, 3, 16, 16), dtype=torch.uint8)
+    # Three episodes: compiled code warms up, records the CUDA graphs, then replays them.
+    expected = _episodes_of_actions(eager, obs, "eval", 3)
+    for actual, reference in zip(_episodes_of_actions(graphed, obs, "eval", 3), expected):
+        assert torch.allclose(actual, reference, atol=1e-4)
+    assert counters["inductor"]["cudagraph_skips"] == 0
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a GPU")
@@ -109,10 +160,13 @@ def test_cuda_graphs_train_like_eager_stages(finetune):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a GPU")
-def test_fit_with_cuda_graphs_logs_metrics_and_figures(tmp_path):
-    sold = make_tiny_sold(max_steps=30, save_replay_buffer=False)
+def test_fit_with_cuda_graphs_logs_metrics_and_figures(tmp_path, monkeypatch):
+    # Inductor's own random numbers, as in training: the eager normal(mean, std) checks std on the host, which a CUDA
+    # graph cannot record.
+    monkeypatch.setattr(torch._inductor.config, "fallback_random", False)
+    sold = make_tiny_sold(fakes.FakeBatchEnv(2), max_steps=30, save_replay_buffer=False)  # Action selection too.
     logger = fit_sold(sold, tmp_path, device="cuda", compile_mode="reduce-overhead")
     records = read_metrics(logger.log_dir)
     losses = [record["train/actor_loss"] for record in records if "train/actor_loss" in record]
     assert len(losses) == 4 and len(set(losses)) == 4  # Each round's own value, not an overwritten graph output.
-    assert list(Path(logger.log_dir).glob("**/latent_imagination-step=*.png"))  # Figures after the evaluation at 20.
+    assert list(Path(logger.log_dir).glob("**/latent_imagination-step=*.png"))  # Figures after the second evaluation.
