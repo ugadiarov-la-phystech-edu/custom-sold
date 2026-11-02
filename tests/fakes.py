@@ -72,6 +72,17 @@ def make_fake_env(image_size=(16, 16), max_episode_steps: int = 8, action_repeat
     return env
 
 
+def make_seeded_fake_env(seed=None, **env_kwargs):
+    """A fake environment that renders seed % 256 in the green channel, to tell VectorEnv workers apart."""
+    env = make_fake_env(seed=seed, **env_kwargs)
+    env.unwrapped.marker = seed % 256
+    return env
+
+
+def make_broken_env(seed=None):
+    raise ValueError("broken environment")
+
+
 class FakeBatchEnv:
     """num_envs fake environments stepped in-process, with the interface of sold.envs.vector.VectorEnv.
 

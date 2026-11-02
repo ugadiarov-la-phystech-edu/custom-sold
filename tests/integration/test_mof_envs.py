@@ -1,10 +1,12 @@
 """The real multi_object_fetch environments through SOLD's wrapper stack (needs mujoco-py with rendering)."""
 
+import functools
 import numpy as np
 import pytest
 import random
 from sold import envs
 from sold.envs.from_mof import VariableDistractorsWrapper
+from sold.envs.vector import VectorEnv
 import torch
 
 pytestmark = pytest.mark.mujoco
@@ -68,3 +70,20 @@ def test_reset_frames_show_the_new_scene_when_environments_alternate():
         rerendered = env.env.env.unwrapped.render(mode="rgb_array", size=(64, 64))
         assert torch.equal(frame, torch.from_numpy(np.ascontiguousarray(np.moveaxis(rerendered, -1, 0))))
     assert len(env.env.envs) > 1  # The resets alternated between environments.
+
+
+def test_vector_env_of_real_environments():
+    factory = functools.partial(envs.make_env, "mof", "PushRed_0to4Distractors_Dense-v1", (64, 64), 50, 2)
+    env = VectorEnv(factory, num_envs=2, seed=5)
+    try:
+        first = env.reset()
+        assert first.shape == (2, 3, 64, 64) and not torch.equal(first[0], first[1])  # Each worker its own scenes.
+        obs, rewards, dones, infos = env.step(torch.zeros(2, *env.action_space.shape))
+        assert obs.shape == (2, 3, 64, 64) and dones == [False, False] and all("success" in info for info in infos)
+    finally:
+        env.close()
+    again = VectorEnv(factory, num_envs=2, seed=5)
+    try:
+        assert torch.equal(again.reset(), first)  # The seed makes the workers' scenes reproducible.
+    finally:
+        again.close()
