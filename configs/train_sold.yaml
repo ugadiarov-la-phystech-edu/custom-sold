@@ -11,6 +11,7 @@ experiment: "my_experiment"
 seed: 42
 device: auto  # "cuda", "cpu" or "auto" (the GPU when there is one).
 float32_matmul_precision: high  # TF32 matmuls on GPUs; "highest" for full float32.
+num_envs: 1  # Environments stepped in parallel, each in its own process if more than one (sold.envs.vector).
 fused_optimizers: null  # Fused Adam kernels: null uses them on GPUs.
 compile:  # torch.compile of the training stages (SOLDModule.STAGES); the first update compiles for several minutes.
   # "reduce-overhead": compiled and replayed as CUDA graphs, the fastest on a GPU; "default": compiled without CUDA

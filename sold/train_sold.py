@@ -8,6 +8,7 @@ import numpy as np
 from omegaconf import DictConfig
 import os
 from sold import rl
+from sold.envs.vector import VectorEnv
 from sold.modeling.autoencoder.base import Autoencoder
 from sold.modeling.autoencoder.losses import reconstruction_loss
 from sold.modeling.distributions import Moments
@@ -479,16 +480,23 @@ def train(cfg: DictConfig):
     print_summary(cfg)
     set_seed(cfg.seed)
     torch.set_float32_matmul_precision(cfg.float32_matmul_precision)
-    sold = hydra.utils.instantiate(cfg.model)
+    if cfg.num_envs == 1:
+        sold = hydra.utils.instantiate(cfg.model)
+    else:  # Each environment in its own process, built from the environment config.
+        env_factory = hydra.utils.instantiate(cfg.model.env, _partial_=True)
+        sold = hydra.utils.instantiate(cfg.model, env=VectorEnv(env_factory, cfg.num_envs, cfg.seed))
     logger = hydra.utils.instantiate(cfg.logger.tensorboard)
-    sold.fit(
-        logger,
-        device=cfg.device,
-        checkpoint=os.path.abspath(cfg.checkpoint) if cfg.checkpoint else None,
-        fused_optimizers=cfg.fused_optimizers,
-        compile_mode=cfg.compile.mode,
-        compile_stages=cfg.compile.stages,
-    )
+    try:
+        sold.fit(
+            logger,
+            device=cfg.device,
+            checkpoint=os.path.abspath(cfg.checkpoint) if cfg.checkpoint else None,
+            fused_optimizers=cfg.fused_optimizers,
+            compile_mode=cfg.compile.mode,
+            compile_stages=cfg.compile.stages,
+        )
+    finally:
+        sold.env.close()
 
     if cfg.logger.log_to_wandb:
         wandb.finish()

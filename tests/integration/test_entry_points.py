@@ -176,6 +176,13 @@ def test_train_sold_writes_checkpoints_and_metrics(sold_run):
     assert (sold_run / ".hydra" / "config.yaml").exists()
 
 
+def test_train_sold_with_parallel_environments(monkeypatch, tmp_path, savi_checkpoint):
+    run_entry_point(monkeypatch, train_sold.train, sold_overrides(tmp_path, savi_checkpoint, num_envs=2))
+    records = [json.loads(line) for line in open(next(tmp_path.glob("logs/version_0/metrics/metrics.jsonl")))]
+    assert max(record["step"] for record in records) >= 30 and any("eval/episode_return" in r for r in records)
+    assert next(tmp_path.glob("logs/version_0/checkpoints/*.ckpt"))
+
+
 def test_train_sold_with_wandb(monkeypatch, tmp_path, savi_checkpoint):
     fake_wandb = fakes.install_fake_wandb(monkeypatch)
     precisions = []
