@@ -243,9 +243,9 @@ def test_training_step_logs_figures_only_after_evaluation(tiny_sold, monkeypatch
 
 
 def test_select_action_modes(tiny_sold):
-    obs = torch.randint(0, 255, (3, 16, 16), dtype=torch.uint8)
+    obs = torch.randint(0, 255, (1, 3, 16, 16), dtype=torch.uint8)  # A batch of one environment.
     random_action = tiny_sold.select_action(obs, is_first=True, mode="random")
-    assert random_action.shape == (2,) and tiny_sold._slot_history.shape == (1, 1, 2, 8)
+    assert random_action.shape == (1, 2) and tiny_sold._slot_history.shape == (1, 1, 2, 8)
     train_action = tiny_sold.select_action(obs, mode="train")
     assert tiny_sold._slot_history.shape == (1, 2, 2, 8)
     eval_a = tiny_sold.select_action(obs, is_first=True, mode="eval")
@@ -263,7 +263,7 @@ def test_select_action_clamps_with_first_dimension_bounds():
         low=-0.1, high=0.1, shape=(2,), dtype=env.action_space.dtype
     )
     sold = make_tiny_sold(env)
-    obs = torch.zeros(3, 16, 16, dtype=torch.uint8)
+    obs = torch.zeros(1, 3, 16, 16, dtype=torch.uint8)
     for _ in range(5):
         assert sold.select_action(obs, is_first=True, mode="train").abs().max() <= 0.1
 
@@ -310,8 +310,8 @@ def test_actions_are_clamped_per_dimension():
         low=np.array([-1.0, -0.1], np.float32), high=np.array([1.0, 0.1], np.float32)
     )
     sold = make_tiny_sold(env)
-    obs = torch.zeros(3, 16, 16, dtype=torch.uint8)
-    actions = torch.stack([sold.select_action(obs, is_first=True, mode="train") for _ in range(50)])
+    obs = torch.zeros(1, 3, 16, 16, dtype=torch.uint8)
+    actions = torch.cat([sold.select_action(obs, is_first=True, mode="train") for _ in range(50)])
     assert actions[:, 1].abs().max() <= 0.1 + 1e-6
 
 

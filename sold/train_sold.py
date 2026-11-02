@@ -442,23 +442,26 @@ class SOLDModule(OnlineModule):
         return rl.returns.lambda_returns(rewards, values, self.discount_factor, self.return_lambda)
 
     def select_action(self, observation: torch.Tensor, is_first: bool = False, mode: str = "train") -> torch.Tensor:
-        observation = observation.unsqueeze(0) / 255.0  # Expand batch dimension (1, 3, height, width).
+        observation = observation / 255.0  # (num_envs, 3, height, width)
+        num_envs = observation.shape[0]
 
-        # Encode image into slots and append to context.
+        # Encode the images into slots and append them to the context.
         last_slots = None if is_first else self._slot_history[:, -1]
         slots = self.autoencoder.encode(
-            observation.unsqueeze(1), self.last_action.unsqueeze(0).unsqueeze(1), prior_slots=last_slots
-        )  # Expand sequence (and batch) dimension.
+            observation.unsqueeze(1), self.last_action.unsqueeze(1), prior_slots=last_slots
+        )  # Add the sequence dimension.
         self._slot_history = slots if is_first else torch.cat([self._slot_history, slots], dim=1)
 
         if mode == "random":
-            selected_action = torch.from_numpy(self.env.action_space.sample().astype(np.float32))
+            selected_action = torch.stack(
+                [torch.from_numpy(self.env.action_space.sample().astype(np.float32)) for _ in range(num_envs)]
+            )
         else:
             action_dist = self.actor(self._slot_history, start=self._slot_history.shape[1] - 1)
             if mode == "train":
-                selected_action = action_dist.sample().squeeze()
+                selected_action = action_dist.sample().reshape(num_envs, -1)
             elif mode == "eval":
-                selected_action = action_dist.mode.squeeze()
+                selected_action = action_dist.mode.reshape(num_envs, -1)
             else:
                 raise ValueError(f"Invalid mode: {mode}")
 

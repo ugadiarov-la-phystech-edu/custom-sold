@@ -6,6 +6,7 @@ import gym
 import importlib.machinery
 import numpy as np
 import sys
+import torch
 import types
 
 
@@ -48,6 +49,7 @@ class FakePixelEnv(gym.Env):
         image = np.zeros((height, width, 3), np.uint8)
         row = int((self.position[1] + 1) / 2 * (height - 1))
         col = int((self.position[0] + 1) / 2 * (width - 1))
+        image[..., 1] = getattr(self, "marker", 0)  # Tells environments of a FakeBatchEnv apart.
         image[..., 2] = (self.t * 20) % 256
         image[max(row - 1, 0) : row + 2, max(col - 1, 0) : col + 2, 0] = 255
         return image
@@ -68,6 +70,34 @@ def make_fake_env(image_size=(16, 16), max_episode_steps: int = 8, action_repeat
     for key, value in env_kwargs.items():
         setattr(env.unwrapped, key, value)
     return env
+
+
+class FakeBatchEnv:
+    """num_envs fake environments stepped in-process, with the interface of sold.envs.vector.VectorEnv.
+
+    Environment i renders i * 50 in the green channel. episode_lengths sets each environment's episode length.
+    """
+
+    def __init__(self, num_envs: int = 2, episode_lengths=None, **env_kwargs):
+        self.envs = [make_fake_env(**env_kwargs) for _ in range(num_envs)]
+        for index, env in enumerate(self.envs):
+            env.unwrapped.marker = index * 50
+            if episode_lengths is not None:
+                env.unwrapped.episode_length = episode_lengths[index]
+        self.num_envs = num_envs
+        self.action_space = self.envs[0].action_space
+        self.max_episode_steps = self.envs[0].max_episode_steps
+        self.closed = False
+
+    def reset(self):
+        return torch.stack([env.reset() for env in self.envs])
+
+    def step(self, actions):
+        obs, rewards, dones, infos = zip(*[env.step(action) for env, action in zip(self.envs, actions)])
+        return torch.stack(obs), list(rewards), list(dones), list(infos)
+
+    def close(self):
+        self.closed = True
 
 
 # ------------------------------------------------------------------ fake dm_control / dm_env

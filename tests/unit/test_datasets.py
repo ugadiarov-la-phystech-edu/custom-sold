@@ -103,6 +103,17 @@ def test_ring_buffer_stores_episode_and_statistics(buffer):
     assert buffer.average_episode_length == 4 and not buffer.is_empty and not buffer.is_full
 
 
+def test_ring_buffer_keeps_one_unfinished_episode_per_stream(tmp_path):
+    buffer = RingBufferDataset(100, 1, 2, save_path=str(tmp_path))
+    for t in range(3):  # Two environments' episodes, stepped alternately.
+        for stream in (0, 1):
+            step = {"obs": torch.full((3, 2, 2), 10 * stream + t, dtype=torch.uint8), "reward": float(t)}
+            buffer.add_step(step, done=t == 2, stream=stream)
+    assert buffer.num_episodes == 2 and buffer.episode_lengths == [3, 3] and not buffer.current_episodes
+    stored = [buffer.ring_buffer["obs"][start:end, 0, 0, 0].tolist() for start, end in buffer.episode_boundaries]
+    assert stored == [[0, 1, 2], [10, 11, 12]]  # Each episode contiguous, from its own stream.
+
+
 def test_ring_buffer_wraps_and_evicts_oldest(buffer):
     add_episode(buffer, make_episode(4, start=0))
     add_episode(buffer, make_episode(4, start=10))
