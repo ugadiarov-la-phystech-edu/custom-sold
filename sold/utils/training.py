@@ -287,6 +287,8 @@ class OnlineModule(nn.Module, ABC):
         self.cudagraphs = mode in ("reduce-overhead", "max-autotune")
 
     def _policy(self, obs: torch.Tensor, is_first: bool, mode: str) -> torch.Tensor:
+        if self.cudagraphs:  # Outputs of earlier replays are copied out by now.
+            torch.compiler.cudagraph_mark_step_begin()
         # select_action reads last_action to encode the next observation.
         self.last_action[:] = self.select_action(obs.to(self.device), is_first=is_first, mode=mode)
         return self.last_action

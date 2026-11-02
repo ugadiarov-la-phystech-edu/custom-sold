@@ -65,7 +65,11 @@ class Imagination:
 
 class SOLDModule(OnlineModule):
     GRADIENT_NORMS = ("reward_predictor", "actor", "critic")
-    STAGES = ("autoencoder", "dynamics_loss", "reward_loss", "imagination", "actor_loss", "critic_loss")
+    # The training stages, then the action selection's.
+    STAGES = (
+        *("autoencoder", "dynamics_loss", "reward_loss", "imagination", "actor_loss", "critic_loss"),
+        *("encode", "act"),
+    )
 
     def __init__(
         self,
@@ -128,6 +132,7 @@ class SOLDModule(OnlineModule):
         )
         self.hparams = hparams
 
+        self.max_episode_steps = env.max_episode_steps  # Length of the slot history in select_action.
         regression_infos = {
             "max_episode_steps": env.max_episode_steps,
             "num_slots": autoencoder.num_slots,
@@ -443,31 +448,43 @@ class SOLDModule(OnlineModule):
         return rl.returns.lambda_returns(rewards, values, self.discount_factor, self.return_lambda)
 
     def select_action(self, observation: torch.Tensor, is_first: bool = False, mode: str = "train") -> torch.Tensor:
+        if mode not in ("train", "eval", "random"):
+            raise ValueError(f"Invalid mode: {mode}")
         observation = observation / 255.0  # (num_envs, 3, height, width)
         num_envs = observation.shape[0]
 
-        # Encode the images into slots and append them to the context.
-        last_slots = None if is_first else self._slot_history[:, -1]
-        slots = self.autoencoder.encode(
-            observation.unsqueeze(1), self.last_action.unsqueeze(1), prior_slots=last_slots
-        )  # Add the sequence dimension.
-        self._slot_history = slots if is_first else torch.cat([self._slot_history, slots], dim=1)
+        # Encode the images into slots and add them to the episode's slot history, a buffer of max_episode_steps steps
+        # (static shapes, so that the compiled stages replay one CUDA graph at every step).
+        if is_first:
+            self._slot_history = observation.new_zeros(
+                num_envs, self.max_episode_steps, self.autoencoder.num_slots, self.autoencoder.slot_dim
+            )
+            self._step = 0
+        last_slots = None if is_first else self._slot_history[:, self._step - 1]
+        slots = self._encode_stage(observation.unsqueeze(1), self.last_action.unsqueeze(1), last_slots)
+        self._slot_history[:, self._step] = slots[:, 0]
+        index = torch.tensor([self._step], device=observation.device)
+        self._step += 1
 
         if mode == "random":
             selected_action = torch.stack(
                 [torch.from_numpy(self.env.action_space.sample().astype(np.float32)) for _ in range(num_envs)]
-            )
-        else:
-            action_dist = self.actor(self._slot_history, start=self._slot_history.shape[1] - 1)
-            if mode == "train":
-                selected_action = action_dist.sample().reshape(num_envs, -1)
-            elif mode == "eval":
-                selected_action = action_dist.mode.reshape(num_envs, -1)
-            else:
-                raise ValueError(f"Invalid mode: {mode}")
+            ).to(self.actor.lower_bound.device)
+            return torch.clamp(selected_action, self.actor.lower_bound, self.actor.upper_bound)
+        return self._act_stage(self._slot_history, index, mode).clone()
 
+    def _encode_stage(
+        self, images: torch.Tensor, actions: torch.Tensor, prior_slots: torch.Tensor | None
+    ) -> torch.Tensor:
+        """One SAVi step: the slots (num_envs, 1, num_slots, slot_dim) of images (num_envs, 1, 3, height, width)."""
+        return self.autoencoder.encode(images, actions, prior_slots=prior_slots)
+
+    def _act_stage(self, slot_history: torch.Tensor, index: torch.Tensor, mode: str) -> torch.Tensor:
+        """The actions (num_envs, action_dim) at time step index of the slot history: sampled ("train") or the mode."""
+        action_dist = self.actor(slot_history, index=index)
+        selected_action = action_dist.sample() if mode == "train" else action_dist.mode
+        selected_action = selected_action.reshape(slot_history.shape[0], -1)
         # Clamp every dimension to its own bounds (the actor keeps them as buffers on the module's device).
-        selected_action = selected_action.to(self.actor.lower_bound.device)
         return torch.clamp(selected_action, self.actor.lower_bound, self.actor.upper_bound).detach()
 
 

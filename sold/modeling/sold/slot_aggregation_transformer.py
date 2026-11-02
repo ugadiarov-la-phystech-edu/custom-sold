@@ -45,15 +45,21 @@ class SlotAggregationTransformer(nn.Module):
         self.positional_encoding = positional_encoding
         self.slot_projection = nn.Linear(slot_dim, self.token_dim)
 
-    def forward(self, slots: torch.Tensor, start: int = 0) -> torch.Tensor:
-        """Output tokens from time step start on, shape (batch_size, sequence_length - start, token_dim)."""
-        return self._encode(slots, start, return_attention=False)[0]
+    def forward(self, slots: torch.Tensor, start: int = 0, index: torch.Tensor | None = None) -> torch.Tensor:
+        """Output tokens from time step start on, shape (batch_size, sequence_length - start, token_dim).
+
+        With index (a one-element tensor), only the token of that time step, (batch_size, 1, token_dim): the causal mask
+        hides the later steps, so slots padded beyond index give the same token as slots ending at index.
+        """
+        return self._encode(slots, start, return_attention=False, index=index)[0]
 
     def forward_with_attention(self, slots: torch.Tensor, start: int = 0) -> tuple[torch.Tensor, list[torch.Tensor]]:
         """The output tokens and each layer's head-averaged attention weights, (batch_size, num_tokens, num_tokens)."""
         return self._encode(slots, start, return_attention=True)
 
-    def _encode(self, slots: torch.Tensor, start: int, return_attention: bool) -> tuple[torch.Tensor, list]:
+    def _encode(
+        self, slots: torch.Tensor, start: int, return_attention: bool, index: torch.Tensor | None = None
+    ) -> tuple[torch.Tensor, list]:
         batch_size, sequence_length, num_slots, slot_dim = slots.shape
         slot_tokens = self.slot_projection(slots)  # Project slots to token_dim.
 
@@ -70,10 +76,10 @@ class SlotAggregationTransformer(nn.Module):
             output_tokens, weights = transformer_encoder_block.encode(output_tokens, attention_mask, return_attention)
             attention_weights.append(weights)
 
-        output_tokens = output_tokens.reshape(batch_size, sequence_length, -1, self.token_dim)[
-            :, -(sequence_length - start) :, -1
-        ]
-        return output_tokens, attention_weights
+        output_tokens = output_tokens.reshape(batch_size, sequence_length, -1, self.token_dim)[:, :, -1]
+        if index is not None:
+            return output_tokens.index_select(1, index), attention_weights
+        return output_tokens[:, -(sequence_length - start) :], attention_weights
 
 
 class TransformerEncoderLayer(Module):
