@@ -94,6 +94,14 @@ files (about 15 GB) next to each checkpoint, for runs whose log directory may be
 point to their buffer: rebuild its `bookkeeping.pt` with `scripts/rebuild_replay_buffer_bookkeeping.py` and pass the
 directory as `replay_buffer=DIR`.
 
+Several environments can be stepped in parallel, each in its own process, with batched action selection:
+```bash
+python train_sold.py preset=push_red num_envs=8
+```
+The number of updates per environment step stays the same, so runs remain comparable. The environments' episodes must
+end together (multi_object_fetch episodes always last `max_episode_steps`). Evaluation runs at the first episode end after
+each `eval_freq` env steps, which with N environments can be up to `N * max_episode_steps` later.
+
 
 <details>
     <summary><i>Show sample training outputs</i></summary>
