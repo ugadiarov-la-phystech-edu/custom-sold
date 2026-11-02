@@ -11,6 +11,7 @@ from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, T
 import shutil
 from sold.data.ring_buffer import BOOKKEEPING_FILE, RingBufferDataset
 from sold.data.utils import sample_batches
+from sold.envs.vector import SingleEnv
 from sold.utils.episode_runner import EpisodeRunner
 from sold.utils.logging import MetricsWriter
 from sold.utils.profiling import Timings
@@ -121,7 +122,8 @@ class OnlineModule(nn.Module, ABC):
             keep_last_checkpoint_only (bool): Delete the run's earlier checkpoints whenever a new one is saved.
         """
         super().__init__()
-        self.env = env
+        self.env = env if hasattr(env, "num_envs") else SingleEnv(env)  # A batch of environments (sold.envs.vector).
+        self.num_envs = self.env.num_envs
         self.max_steps = max_steps
         self.num_seed = num_seed
         self.update_freq = update_freq
@@ -135,11 +137,13 @@ class OnlineModule(nn.Module, ABC):
         self.keep_last_checkpoint_only = keep_last_checkpoint_only
         self.hparams: dict[str, Any] = {}  # Constructor arguments, saved in checkpoints to rebuild the module.
 
-        self.register_buffer("last_action", self._nan_action(), persistent=False)
+        self.register_buffer("last_action", self._nan_actions(), persistent=False)  # (num_envs, action_dim)
         self.timings = Timings(enabled=profile)
-        self.runner = EpisodeRunner(env, self._policy, self.timings)
+        self.runner = EpisodeRunner(self.env, self._policy, self.timings)
         self.num_steps = 0
-        self.num_episodes = -1  # Start at -1 to account for the initial reset.
+        self.num_episodes = -self.num_envs  # The initial reset adds num_envs.
+        self.update_carry = 0  # Remainder of num_updates / update_freq updates owed per env step (update_count).
+        self.finished_returns: list[torch.Tensor] = []  # Returns of the episodes finished since the last reset.
         # Set up by fit().
         self.optimizers: list[Optimizer] = []
         self.num_updates_since_restore: int | None = None  # Counts gradient updates after resuming (None: fresh run).
@@ -165,7 +169,8 @@ class OnlineModule(nn.Module, ABC):
 
     @abstractmethod
     def select_action(self, obs: torch.Tensor, is_first: bool = False, mode: str = "train") -> torch.Tensor:
-        """The action to take after observing obs, in mode "train" (sampled), "eval" (mode) or "random"."""
+        """The actions (num_envs, action_dim) after observing obs (num_envs, ...), in mode "train" (sampled), "eval"
+        (mode) or "random"."""
 
     @abstractmethod
     def training_step(self, batch: dict[str, torch.Tensor], visualize: bool = False) -> dict[str, Any]:
@@ -219,50 +224,66 @@ class OnlineModule(nn.Module, ABC):
                 self.update()
             self.collect(self.num_seed if self.num_steps == 0 and self.num_seed > 0 else self.update_freq)
             while self.num_steps < self.max_steps:
-                self.collect(self.update_freq)
-                self.update()
+                self.update(self.update_count(self.collect(self.update_freq)))
         logger.finalize()
 
+    def update_count(self, num_steps: int) -> int:
+        """How many updates num_steps new env steps earn: num_updates per update_freq steps, carrying the remainder."""
+        num_updates, self.update_carry = divmod(num_steps * self.num_updates + self.update_carry, self.update_freq)
+        return num_updates
+
     @torch.no_grad()
-    def collect(self, num_steps: int) -> None:
-        for _ in range(num_steps):
+    def collect(self, num_steps: int) -> int:
+        """Collect at least num_steps env steps (whole batches of num_envs); return how many."""
+        start = self.num_steps
+        while self.num_steps < start + num_steps:
             self.collect_step()
             self.progress.update(self.num_steps, self.num_episodes)
+        return self.num_steps - start
 
     @torch.no_grad()
     def collect_step(self) -> None:
-        if self.num_steps % self.eval_freq == 0:
+        """One step of every environment, stored in the replay buffer (each environment's episode separately)."""
+        next_eval_step = -(-self.num_steps // self.eval_freq) * self.eval_freq  # The first multiple from num_steps.
+        if next_eval_step < self.num_steps + self.num_envs:
             self.eval_next = True
 
         if self.runner.done:
-            self.num_episodes += 1
+            self.num_episodes += self.num_envs
             if self.eval_next:
                 with self.timings.measure("eval/total"):
                     self.eval_loop()
 
-            # Reset environment and store initial observation.
+            # Reset the environments and store the initial observations.
             self.log("train/buffer_size", self.replay_buffer.num_timesteps)
-            if self.replay_buffer.last_episode_return is not None:
-                self.log("train/episode_return", self.replay_buffer.last_episode_return)
+            if self.finished_returns:
+                self.log("train/episode_return", torch.stack(self.finished_returns).mean())
+                self.finished_returns = []
             obs = self.runner.reset()
             with self.timings.measure("replay_buffer/add_step"):
-                first = {"obs": obs, "action": self._nan_action(), "reward": torch.tensor(float("nan"))}
-                self.replay_buffer.add_step(first)
+                for env_index, env_obs in enumerate(obs):
+                    first = {"obs": env_obs, "action": self._nan_action(), "reward": torch.tensor(float("nan"))}
+                    self.replay_buffer.add_step(first, stream=env_index)
             self.log("train/num_episodes", self.num_episodes)
             self.log("train/num_steps", self.num_steps)
 
-        # Select action, perform environment step, and store resulting experience.
+        # Select actions, step the environments, and store the resulting experience.
         mode = "train" if self.num_steps >= self.num_seed else "random"
-        obs, reward, done, info = self.runner.step(mode)
+        obs, rewards, dones, _ = self.runner.step(mode)
         with self.timings.measure("replay_buffer/add_step"):
-            self.replay_buffer.add_step({"obs": obs, "action": self.runner.action, "reward": reward}, done=done)
-        self.num_steps += 1
+            for env_index, (env_obs, action, reward, done) in enumerate(zip(obs, self.runner.action, rewards, dones)):
+                step = {"obs": env_obs, "action": action, "reward": reward}
+                self.replay_buffer.add_step(step, done=done, stream=env_index)
+                if done:
+                    self.finished_returns.append(self.replay_buffer.last_episode_return)
+        self.num_steps += self.num_envs
 
-    def update(self) -> None:
-        """A round of num_updates gradient updates on replay-buffer batches, then the round's metrics."""
+    def update(self, num_updates: int | None = None) -> None:
+        """A round of gradient updates on replay-buffer batches (num_updates of them), then the round's metrics."""
         outputs, device = None, self.device
         visualize, self.after_eval = self.after_eval, False
-        for index, batch in enumerate(sample_batches(self.replay_buffer, self.num_updates, self.timings)):
+        num_updates = self.num_updates if num_updates is None else num_updates
+        for index, batch in enumerate(sample_batches(self.replay_buffer, num_updates, self.timings)):
             if self.cudagraphs:  # The previous update's graph outputs may be overwritten from here on.
                 torch.compiler.cudagraph_mark_step_begin()
             with self.timings.measure("learn/training_step"):
@@ -292,11 +313,13 @@ class OnlineModule(nn.Module, ABC):
     def _nan_action(self) -> torch.Tensor:
         return torch.full_like(torch.from_numpy(self.env.action_space.sample().astype(np.float32)), float("nan"))
 
+    def _nan_actions(self) -> torch.Tensor:
+        return torch.stack([self._nan_action() for _ in range(self.num_envs)])
+
     @torch.no_grad()
     def eval_loop(self) -> None:
         episode_returns, successes = [], []
-        for episode_index in range(self.num_eval_episodes):
-            episode = self.runner.play_episode(mode="eval")
+        for episode_index, episode in enumerate(self.runner.play_episodes("eval", self.num_eval_episodes)):
             with self.timings.measure("eval/video_logging"):
                 self.log_video(f"eval/episode_{episode_index}", torch.stack(episode["obs"]))
             episode_returns.append(sum(episode["reward"]))
@@ -307,8 +330,7 @@ class OnlineModule(nn.Module, ABC):
         if successes:
             self.log("eval/success_rate", np.mean(successes))
 
-        for episode_index in range(3):
-            episode = self.runner.play_episode(mode="train")
+        for episode_index, episode in enumerate(self.runner.play_episodes("train", 3)):
             with self.timings.measure("eval/video_logging"):
                 self.log_video(f"train/episode_{episode_index}", torch.stack(episode["obs"]))
 
@@ -416,7 +438,7 @@ class OnlineModule(nn.Module, ABC):
 
     def load_counters(self, checkpoint: dict[str, Any]) -> None:
         self.num_steps = checkpoint["num_steps"]
-        self.num_episodes = checkpoint["num_episodes"] - 1  # Incremented at once, since self.runner.done is True.
+        self.num_episodes = checkpoint["num_episodes"] - self.num_envs  # The first reset adds num_envs again.
 
     def restore(self, checkpoint: dict[str, Any]) -> None:
         """Resume training from a checkpoint: weights, optimizer states, counters and the saved replay buffer."""

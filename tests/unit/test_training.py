@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 import random
 from sold.data.ring_buffer import RingBufferDataset
+from sold.envs.vector import SingleEnv
 from sold.utils import training
 from sold.utils.episode_runner import EpisodeRunner
 from sold.utils.profiling import Timings
@@ -72,7 +73,8 @@ def test_progress_bar_describes_steps_episodes_and_eval_return():
 
 def test_online_module_initial_state(tiny_sold):
     assert tiny_sold.num_steps == 0 and tiny_sold.num_episodes == -1
-    assert tiny_sold.last_action.shape == (2,) and torch.isnan(tiny_sold.last_action).all()
+    assert tiny_sold.num_envs == 1 and isinstance(tiny_sold.env, SingleEnv)  # A plain env is a batch of one.
+    assert tiny_sold.last_action.shape == (1, 2) and torch.isnan(tiny_sold.last_action).all()
     assert "last_action" not in tiny_sold.state_dict()  # Not persistent: the checkpoint keys stay as they were.
     assert tiny_sold.sequence_length == 3 + 2
     assert tiny_sold.device == torch.device("cpu") and tiny_sold.replay_buffer is None
@@ -87,12 +89,12 @@ def test_online_module_runner_updates_the_last_action(tiny_sold):
 
 # ----------------------------------------------------------------------------- episode runner
 def _runner(timings=None, **env_kwargs):
-    env = fakes.make_fake_env(**env_kwargs)
+    env = SingleEnv(fakes.make_fake_env(**env_kwargs))
     calls = []
 
     def policy(obs, is_first, mode):
         calls.append((is_first, mode))
-        return torch.full((2,), 0.5)
+        return torch.full((obs.shape[0], 2), 0.5)
 
     return EpisodeRunner(env, policy, timings), calls
 
@@ -113,11 +115,12 @@ def test_episode_runner_steps_and_marks_the_first_step():
     assert runner.done and runner.obs is None
     first = runner.reset()
     assert torch.equal(first, runner.obs) and not runner.done
+    assert first.shape == (1, 3, 16, 16)
     runner.step("random")
-    obs, reward, done, info = runner.step("train")
-    assert torch.equal(runner.action, torch.full((2,), 0.5))
+    obs, rewards, dones, infos = runner.step("train")
+    assert torch.equal(runner.action, torch.full((1, 2), 0.5))
     assert calls == [(True, "random"), (False, "train")]
-    assert torch.equal(obs, runner.obs) and not done
+    assert torch.equal(obs, runner.obs) and dones == [False] and len(rewards) == len(infos) == 1
     runner.reset()
     assert runner.is_first
 
@@ -424,6 +427,65 @@ def test_fit_without_profiling_logs_no_timings(tmp_path):
     _, logger = _fit(tmp_path, max_steps=20, profile=False)
     records = read_metrics(logger.log_dir)
     assert records and not any(key.startswith("timing/") for key in set().union(*records))
+
+
+# ------------------------------------------------------------------------ several environments
+def test_update_count_keeps_the_updates_per_env_step(tiny_sold):
+    tiny_sold.num_updates, tiny_sold.update_freq = 2, 25
+    assert tiny_sold.update_count(25) == 2 and tiny_sold.update_carry == 0  # One environment: two updates per round.
+    counts = [tiny_sold.update_count(32) for _ in range(25)]  # Eight environments: rounds of four batched steps.
+    assert set(counts) == {2, 3} and sum(counts) == 32 * 25 * 2 // 25 and tiny_sold.update_carry == 0
+
+
+def test_runner_requires_the_episodes_to_end_together():
+    runner = EpisodeRunner(fakes.FakeBatchEnv(2, episode_lengths=[3, 8]), lambda obs, **kwargs: torch.zeros(2, 2))
+    runner.reset()
+    with pytest.raises(RuntimeError, match="must end together"):
+        for _ in range(3):
+            runner.step("eval")
+
+
+def test_runner_plays_episodes_in_batches_of_environments():
+    runner = EpisodeRunner(fakes.FakeBatchEnv(3), lambda obs, **kwargs: torch.zeros(3, 2))
+    episodes = runner.play_episodes("eval", 4)
+    assert all(len(episode["obs"]) == 9 and len(episode["reward"]) == 8 for episode in episodes)
+    assert all("success" in episode for episode in episodes)
+    assert [episode["obs"][0][1].max().item() for episode in episodes] == [0, 50, 100, 0]  # Two batches of three.
+    with pytest.raises(ValueError, match="single environment"):
+        runner.play_episodes("eval", 1, render=lambda env: None)
+
+
+def _fit_three_environments(tmp_path):
+    sold = make_tiny_sold(fakes.FakeBatchEnv(3), max_steps=40, save_replay_buffer=False)
+    return sold, fit_sold(sold, tmp_path)
+
+
+def test_fit_with_several_environments(tmp_path):
+    sold, logger = _fit_three_environments(tmp_path)
+    assert sold.num_envs == 3 and sold.last_action.shape == (3, 2)
+    # Batched steps of 3 env steps: 12 seed steps, then rounds of 6 steps until 40 is passed.
+    assert sold.num_steps == 42 and sold.num_episodes == 3 and sold.update_carry == 0
+    buffer = sold.replay_buffer
+    assert buffer.num_episodes == 3 and buffer.episode_lengths == [9, 9, 9]
+    obs = buffer.ring_buffer["obs"]
+    markers = [set(obs[start:end, 1].reshape(end - start, -1).max(1)) for start, end in buffer.episode_boundaries]
+    assert markers == [{0}, {50}, {100}]  # Each stored episode comes from one environment.
+    records = read_metrics(logger.log_dir)
+    # Evaluations at the resets after crossing steps 0 and 20 (env step 24), each with a checkpoint.
+    assert [record["step"] for record in records if "eval/episode_return" in record] == [0, 24]
+    assert sorted(path.name.split("-eval")[0] for path in (Path(logger.log_dir) / "checkpoints").glob("*.ckpt")) == [
+        "sold-steps=0-episode=0",
+        "sold-steps=24-episode=3",
+    ]
+    assert [record["step"] for record in records if "train/episode_return" in record] == [24]  # Mean of the three.
+
+
+def test_checkpoints_resume_with_another_number_of_environments(tmp_path):
+    _, logger = _fit_three_environments(tmp_path / "three")
+    checkpoint = sorted((Path(logger.log_dir) / "checkpoints").glob("*.ckpt"))[-1]
+    single = make_tiny_sold(max_steps=40)
+    fit_sold(single, tmp_path / "one", checkpoint=checkpoint)
+    assert single.num_steps == 44 and single.num_episodes >= 3  # Rounds of 5 steps from step 24.
 
 
 # ----------------------------------------------------------------------------- checkpoints

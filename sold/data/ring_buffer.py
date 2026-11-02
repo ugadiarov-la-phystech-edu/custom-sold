@@ -27,7 +27,7 @@ class EpisodeDataset(EpisodeDatasetInfoMixin, ABC):
         self.capacity = int(capacity)
         self.batch_size = int(batch_size)
         self.sequence_length = int(sequence_length)
-        self.current_episode = defaultdict(list)
+        self.current_episodes: defaultdict[int, defaultdict[str, list]] = defaultdict(lambda: defaultdict(list))
 
         if self.info.fields:
             self._initialize_from_fields(self.info.fields)
@@ -45,23 +45,28 @@ class EpisodeDataset(EpisodeDatasetInfoMixin, ABC):
         """Used to initialize the episode dataset's storage from fields."""
         pass
 
-    def add_step(self, step_data: dict[str, Any], done: bool = False) -> None:
-        """Add a batch of step data to the buffer.
+    @property
+    def current_episode(self) -> defaultdict[str, list]:
+        """The unfinished episode of stream 0."""
+        return self.current_episodes[0]
+
+    def add_step(self, step_data: dict[str, Any], done: bool = False, stream: int = 0) -> None:
+        """Add a step to the unfinished episode of a stream; with done, store that episode.
 
         Args:
-            step_data (dict): Batch of step data to add.
-            done (bool): Whether each episode is done.
+            step_data (dict): The step's data.
+            done (bool): Whether the episode is done.
+            stream (int): Which episode the step belongs to: each of several parallel environments has its own.
         """
 
         for key, value in step_data.items():
             if isinstance(value, torch.Tensor):
-                self.current_episode[key].append(value.clone().detach())
+                self.current_episodes[stream][key].append(value.clone().detach())
             else:
-                self.current_episode[key].append(torch.tensor(value))
+                self.current_episodes[stream][key].append(torch.tensor(value))
 
         if done:
-            self.add_episode(self.current_episode)
-            self.current_episode = defaultdict(list)
+            self.add_episode(self.current_episodes.pop(stream))
 
     def add_episode(self, episode: dict[str, list]) -> None:
         # If dataset fields are not defined, initialize them from the first episode.
