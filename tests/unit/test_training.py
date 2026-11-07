@@ -413,10 +413,30 @@ def _resume_checkpoint(tiny_sold, **extra):
     return {"state_dict": tiny_sold.state_dict(), "optimizer_states": [], "num_steps": 5, "num_episodes": 1, **extra}
 
 
-def test_restore_rejects_a_wrong_number_of_optimizer_states(tiny_sold):
+def test_restore_rejects_too_many_optimizer_states(tiny_sold):
     tiny_sold.optimizers = tiny_sold.configure_optimizers()
-    with pytest.raises(ValueError, match="0 optimizer states for 4 optimizers"):
-        tiny_sold.restore(_resume_checkpoint(tiny_sold))
+    states = [optimizer.state_dict() for optimizer in tiny_sold.optimizers] * 2
+    with pytest.raises(ValueError, match="8 optimizer states for 4 optimizers"):
+        tiny_sold.restore(_resume_checkpoint(tiny_sold, optimizer_states=states))
+
+
+def test_restore_starts_missing_optimizers_fresh_with_a_warning(tiny_sold):
+    # Checkpoints of fine-tuning runs saved before BUGS_AND_PITFALLS.md #17 was fixed lack the autoencoder's state.
+    tiny_sold.optimizers = tiny_sold.configure_optimizers()
+    for optimizer in tiny_sold.optimizers:
+        for group in optimizer.param_groups:
+            group["lr"] = 0.5
+    states = [optimizer.state_dict() for optimizer in tiny_sold.optimizers[:3]]
+    for optimizer in tiny_sold.optimizers:
+        for group in optimizer.param_groups:
+            group["lr"] = 0.25
+    assert tiny_sold.num_updates_since_restore is None
+    with pytest.warns(UserWarning, match="3 optimizer states for 4 optimizers: the last 1 start fresh"):
+        tiny_sold.restore(_resume_checkpoint(tiny_sold, optimizer_states=states))
+    assert tiny_sold.num_updates_since_restore == 0
+    # The run's learning rate wins over the checkpoint's; a fresh optimizer has no state.
+    assert all(group["lr"] == 0.25 for optimizer in tiny_sold.optimizers for group in optimizer.param_groups)
+    assert tiny_sold.optimizers[-1].state_dict()["state"] == {}
 
 
 def test_restore_without_replay_buffer(tiny_sold, tmp_path):

@@ -348,7 +348,7 @@ The local `datasets` package also shadows the Hugging Face `datasets` library in
 
 ### 17. Smaller issues (fixed)
 
-**Status:** fixed (uncommitted). All five items are fixed. Note for the third: checkpoints trained with `finetune_autoencoder: True` before this fix contain four optimizer states, so resuming them with the new code fails with an optimizer-count mismatch.
+**Status:** fixed (uncommitted). All five items are fixed. Note for the third: checkpoints trained with `finetune_autoencoder: True` before this fix contain four optimizer states. Resuming them warns and starts the autoencoder's optimizer fresh; `model.optimization.autoencoder.warmup_updates=N` ramps its learning rate up over the first N updates after resuming, so the fresh Adam moments do not disturb the fine-tuned SAVi.
 
 - `SAVi._initialize_parameters` (`sold/modeling/autoencoder/savi/autoencoder.py:29`) reads `self.corrector.dim_slots`, which does not exist. The branch is currently unreachable.
 - `select_action` clamps with `action_space.low[0]` and `high[0]` (`sold/train_sold.py:326`), which assumes every action dimension has the same bounds.
