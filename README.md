@@ -85,7 +85,9 @@ python train_sold.py compile.mode=null
 ```
 `compile.mode=default` compiles without CUDA graphs; `compile.stages` limits it to some stages (see `SOLDModule.STAGES`).
 
-A run resumes from one of its checkpoints with `checkpoint=PATH`. Checkpoints record only the replay buffer's bookkeeping
+A checkpoint is written after every evaluation (`model.eval_freq` steps) and replaces the run's earlier ones;
+`model.keep_last_checkpoint_only=False` keeps them all. A run resumes from one of its checkpoints with `checkpoint=PATH`.
+Checkpoints record only the replay buffer's bookkeeping
 (also kept in the buffer directory as `bookkeeping.pt`), so the resumed run continues with the old run's buffer as long as
 that run's `logs/version_N/replay_buffer` directory still exists; `model.save_replay_buffer=True` also copies the buffer's
 files (about 15 GB) next to each checkpoint, for runs whose log directory may be deleted. Checkpoints of older runs do not

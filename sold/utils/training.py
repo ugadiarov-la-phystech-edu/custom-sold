@@ -102,6 +102,7 @@ class OnlineModule(nn.Module, ABC):
         buffer_capacity: int,
         save_replay_buffer: bool,
         profile: bool = True,
+        keep_last_checkpoint_only: bool = False,
     ) -> None:
         """
         Args:
@@ -117,6 +118,7 @@ class OnlineModule(nn.Module, ABC):
             buffer_capacity (int): Maximum number of steps to store in the replay buffer.
             save_replay_buffer (bool): Copy the replay buffer's files next to each checkpoint (see restore).
             profile (bool): Log section durations as timing/*_ms.
+            keep_last_checkpoint_only (bool): Delete the run's earlier checkpoints whenever a new one is saved.
         """
         super().__init__()
         self.env = env
@@ -130,6 +132,7 @@ class OnlineModule(nn.Module, ABC):
         self.sequence_length = sequence_length
         self.buffer_capacity = buffer_capacity
         self.save_replay_buffer = save_replay_buffer
+        self.keep_last_checkpoint_only = keep_last_checkpoint_only
         self.hparams: dict[str, Any] = {}  # Constructor arguments, saved in checkpoints to rebuild the module.
 
         self.register_buffer("last_action", self._nan_action(), persistent=False)
@@ -310,10 +313,13 @@ class OnlineModule(nn.Module, ABC):
                 self.log_video(f"train/episode_{episode_index}", torch.stack(episode["obs"]))
 
         with self.timings.measure("eval/checkpoint"):
-            self.save_checkpoint(
-                self.checkpoints_dir / f"sold-steps={self.num_steps}-episode={self.num_episodes}-"
+            path = self.checkpoints_dir / (
+                f"sold-steps={self.num_steps}-episode={self.num_episodes}-"
                 f"eval_episode_return={np.mean(episode_returns)}.ckpt"
             )
+            self.save_checkpoint(path)
+            if self.keep_last_checkpoint_only:
+                self.delete_other_checkpoints(path)
 
         self.eval_next = False
         self.after_eval = True
@@ -369,6 +375,12 @@ class OnlineModule(nn.Module, ABC):
             "num_episodes": self.num_episodes,
         }
         torch.save(checkpoint | self.replay_buffer_checkpoint(), path)
+
+    def delete_other_checkpoints(self, keep: Path) -> None:
+        """Delete the run's checkpoint files except keep (called once the new one is fully written)."""
+        for checkpoint in self.checkpoints_dir.glob("*.ckpt"):
+            if checkpoint != keep:
+                checkpoint.unlink()
 
     def replay_buffer_checkpoint(self) -> dict[str, Any]:
         """Describe the replay buffer for resuming: its bookkeeping and the directory of its files, which with

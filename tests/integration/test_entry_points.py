@@ -166,10 +166,8 @@ def sold_run(tmp_path_factory, savi_checkpoint):
 def test_train_sold_writes_checkpoints_and_metrics(sold_run):
     checkpoints_dir = sold_run / "logs" / "version_0" / "checkpoints"
     names = sorted(p.name for p in checkpoints_dir.iterdir())
-    assert [n.split("-eval")[0] for n in names if n.endswith(".ckpt")] == [
-        "sold-steps=0-episode=0",
-        "sold-steps=24-episode=3",
-    ]
+    # keep_last_checkpoint_only defaults to True: the step-0 checkpoint was deleted.
+    assert [n.split("-eval")[0] for n in names if n.endswith(".ckpt")] == ["sold-steps=24-episode=3"]
     assert not any(name.startswith("replay_buffer-") for name in names)  # save_replay_buffer defaults to False.
     checkpoint = torch.load(sorted(checkpoints_dir.glob("sold-steps=24*.ckpt"))[0], weights_only=False)
     assert checkpoint["replay_buffer_path"] == (sold_run / "logs" / "version_0" / "replay_buffer").resolve()

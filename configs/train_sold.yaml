@@ -33,6 +33,7 @@ model:
   profile: True  # Log section durations as timing/*_ms.
   # Checkpoints record the replay buffer's bookkeeping, so a run resumes with its buffer while the old run's
   # logs/version_N/replay_buffer directory exists; True also copies the buffer's files (15 GB) next to the checkpoint.
+  keep_last_checkpoint_only: True  # Delete the run's earlier checkpoints whenever a new one is saved.
   save_replay_buffer: False
 
   optimization:  # Per model: Adam learning rate, gradient-norm clip and the number of updates over which the learning

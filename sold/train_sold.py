@@ -99,6 +99,7 @@ class SOLDModule(OnlineModule):
         save_replay_buffer: bool,
         critic_regularization_weight: float = 0.1,
         profile: bool = True,
+        keep_last_checkpoint_only: bool = False,
         optimization: Mapping[str, Mapping[str, float]] | None = None,  # Or flat legacy_hparams (old checkpoints).
         **legacy_hparams: Any,
     ) -> None:
@@ -129,6 +130,7 @@ class SOLDModule(OnlineModule):
             buffer_capacity,
             save_replay_buffer,
             profile,
+            keep_last_checkpoint_only,
         )
         self.hparams = hparams
 

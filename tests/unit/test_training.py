@@ -236,6 +236,29 @@ def test_fit_evaluates_and_checkpoints(fitted):
     assert {"eval_episode_0-step=0.mp4", "eval_episode_1-step=0.mp4", "train_episode_2-step=24.mp4"} <= set(videos)
 
 
+def test_fit_keeps_only_the_last_checkpoint_when_asked(tmp_path):
+    sold, logger = _fit(tmp_path, save_replay_buffer=False, keep_last_checkpoint_only=True)
+    checkpoints_dir = Path(logger.log_dir) / "checkpoints"
+    checkpoints = [p.name for p in checkpoints_dir.glob("*.ckpt")]
+    assert len(checkpoints) == 1 and checkpoints[0].startswith("sold-steps=24-episode=3-")  # The one of step 0 is gone.
+    assert sold.hparams["keep_last_checkpoint_only"] is True
+    # The remaining checkpoint resumes.
+    resumed = make_tiny_sold(max_steps=50)
+    fit_sold(resumed, tmp_path / "second", checkpoint=checkpoints_dir / checkpoints[0])
+    assert resumed.num_steps == 54
+
+
+def test_delete_other_checkpoints_spares_the_kept_one_and_other_files(tiny_sold, tmp_path):
+    tiny_sold.logger = SimpleNamespace(log_dir=str(tmp_path))
+    checkpoints_dir = tiny_sold.checkpoints_dir
+    for name in ["sold-steps=0-episode=0-eval_episode_return=1.0.ckpt", "sold-steps=24-episode=3.ckpt", "notes.txt"]:
+        (checkpoints_dir / name).touch()
+    (checkpoints_dir / "replay_buffer-steps=24-episode=3").mkdir()
+    tiny_sold.delete_other_checkpoints(checkpoints_dir / "sold-steps=24-episode=3.ckpt")
+    expected = ["notes.txt", "replay_buffer-steps=24-episode=3", "sold-steps=24-episode=3.ckpt"]
+    assert sorted(os.listdir(checkpoints_dir)) == expected
+
+
 def test_fit_keeps_only_the_latest_replay_buffer_copy(fitted):
     _, log_dir = fitted
     copies = sorted(p.name for p in (log_dir / "checkpoints").glob("replay_buffer-steps=*"))
