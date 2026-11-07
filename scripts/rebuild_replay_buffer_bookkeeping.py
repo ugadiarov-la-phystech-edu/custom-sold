@@ -3,7 +3,7 @@
     python -m scripts.rebuild_replay_buffer_bookkeeping BUFFER_DIR CAPACITY [--output FILE] [--check]
                                                         [--episode-length N] [--sample-episodes N] [--seed S]
 
-BUFFER_DIR holds obs.dat (uint8, [capacity, side, side, 3]), action.dat (float32, [capacity, action_dim]) and
+BUFFER_DIR holds obs.dat (uint8, [capacity, 3, side, side]), action.dat (float32, [capacity, action_dim]) and
 reward.dat (float32, [capacity]) as written by sold.data.ring_buffer.RingBufferDataset; the shapes are inferred from
 the file sizes. Episodes start at the rows with a NaN action (reset entries) and run to the next start, circularly.
 When the ring has wrapped and the capacity is not a multiple of the episode length, one gap also holds the seam: the
@@ -41,7 +41,7 @@ def open_memmaps(buffer_dir: str, capacity: int) -> dict[str, np.memmap]:
     if sizes["action"] % 4 or sizes["reward"] != 4 * capacity:
         raise ValueError("action.dat/reward.dat sizes do not match float32 rows.")
     shapes = {
-        "obs": (capacity, side, side, 3),
+        "obs": (capacity, 3, side, side),  # Channels first, as the Pixels wrapper stores frames.
         "action": (capacity, sizes["action"] // capacity // 4),
         "reward": (capacity,),
     }
