@@ -8,7 +8,7 @@ from sold import rl
 from sold.modeling.autoencoder.losses import reconstruction_loss
 from sold.train_sold import OptimizerSettings, SOLDModule, optimization_settings
 from tests import fakes
-from tests.conftest import fit_sold, make_tiny_sold, tiny_sold_kwargs
+from tests.conftest import fit_sold, make_tiny_sold, read_metrics, tiny_sold_kwargs
 import torch
 import torch.nn.functional as F
 
@@ -77,7 +77,8 @@ def test_imagine_ahead_with_batch_size_one(tiny_sold):
 def test_optimizer_settings_are_grouped_per_model(tiny_sold):
     assert tiny_sold.optimizer_settings["dynamics"] == OptimizerSettings(learning_rate=1e-3, grad_clip=3.0)
     assert tiny_sold.optimizer_settings["autoencoder"].grad_clip == 0.05
-    assert tiny_sold.hparams["optimization"]["critic"] == {"learning_rate": 1e-3, "grad_clip": 10.0}
+    critic = {"learning_rate": 1e-3, "grad_clip": 10.0, "warmup_updates": 0}
+    assert tiny_sold.hparams["optimization"]["critic"] == critic
 
 
 def test_flat_optimizer_settings_of_old_checkpoints_are_grouped():
@@ -90,7 +91,9 @@ def test_flat_optimizer_settings_of_old_checkpoints_are_grouped():
     sold = SOLDModule(optimization=None, **kwargs, **flat)
     assert sold.optimizer_settings["reward"] == OptimizerSettings(learning_rate=1e-3, grad_clip=10.0)
     assert "dynamics_learning_rate" not in sold.hparams  # Checkpoints store the grouped settings.
-    assert sold.hparams["optimization"]["dynamics"] == {"learning_rate": 1e-3, "grad_clip": 3.0}
+    assert sold.hparams["optimization"]["dynamics"] == {"learning_rate": 1e-3, "grad_clip": 3.0, "warmup_updates": 0}
+    sold = SOLDModule(optimization=None, **kwargs, **flat, autoencoder_warmup_updates=7)
+    assert sold.optimizer_settings["autoencoder"].warmup_updates == 7
 
 
 def test_optimization_settings_reject_unknown_arguments_and_settings():
@@ -313,6 +316,51 @@ def test_actions_are_clamped_per_dimension():
     obs = torch.zeros(3, 16, 16, dtype=torch.uint8)
     actions = torch.stack([sold.select_action(obs, is_first=True, mode="train") for _ in range(50)])
     assert actions[:, 1].abs().max() <= 0.1 + 1e-6
+
+
+def _warmup_sold(warmup_updates, **overrides):
+    optimization = tiny_sold_kwargs(fakes.make_fake_env())["optimization"]
+    optimization["autoencoder"] = {**optimization["autoencoder"], "warmup_updates": warmup_updates}
+    sold = make_tiny_sold(finetune_autoencoder=True, optimization=optimization, **overrides)
+    sold.optimizers = sold.configure_optimizers()
+    return sold
+
+
+def _autoencoder_update(sold):
+    autoencoder_optimizer = sold.optimizers[-1]
+    loss = sum(param.square().sum() for param in sold.autoencoder.parameters())
+    sold._optimize("autoencoder", autoencoder_optimizer, loss)
+    return autoencoder_optimizer.param_groups[0]["lr"]
+
+
+def test_warmup_raises_the_learning_rate_linearly_after_a_resume():
+    sold = _warmup_sold(warmup_updates=4)
+    sold.num_updates_since_restore = 0
+    rates = []
+    for update in range(6):
+        sold.num_updates_since_restore = update
+        rates.append(_autoencoder_update(sold))
+    assert rates == pytest.approx([0.25e-3, 0.5e-3, 0.75e-3, 1e-3, 1e-3, 1e-3])
+    assert sold.learning_rates == {"autoencoder": 1e-3}
+
+
+def test_no_warmup_without_a_resume_or_warmup_updates():
+    assert _autoencoder_update(_warmup_sold(warmup_updates=4)) == 1e-3  # num_updates_since_restore is None.
+    sold = _warmup_sold(warmup_updates=0)
+    sold.num_updates_since_restore = 0
+    assert _autoencoder_update(sold) == 1e-3 and sold.learning_rates == {}
+
+
+def test_resumed_training_warms_up_and_logs_the_learning_rate(tmp_path):
+    sold = _warmup_sold(warmup_updates=10**6, max_steps=20)
+    logger = fit_sold(sold, tmp_path / "first")
+    checkpoint = next((Path(logger.log_dir) / "checkpoints").glob("*.ckpt"))
+    resumed = _warmup_sold(warmup_updates=10**6, max_steps=40)
+    logger = fit_sold(resumed, tmp_path / "second", checkpoint=checkpoint)
+    records = read_metrics(logger.log_dir)
+    rates = [record["learning_rate/autoencoder"] for record in records if "learning_rate/autoencoder" in record]
+    assert rates and all(0 < rate < 1e-6 for rate in rates) and rates == sorted(rates)
+    assert all("learning_rate/dynamics" not in record for record in records)
 
 
 # BUGS_AND_PITFALLS.md #17 (fixed).

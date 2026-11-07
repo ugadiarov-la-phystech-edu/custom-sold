@@ -23,10 +23,15 @@ from typing import Any
 
 @dataclass(frozen=True)
 class OptimizerSettings:
-    """Adam learning rate and gradient-norm clip of one model."""
+    """Adam learning rate and gradient-norm clip of one model.
+
+    warmup_updates > 0 raises the learning rate linearly from 0 over that many gradient updates after resuming from a
+    checkpoint (e.g. for an optimizer whose state the checkpoint lacks).
+    """
 
     learning_rate: float
     grad_clip: float
+    warmup_updates: int = 0
 
 
 OPTIMIZED_MODELS = ("dynamics", "reward", "actor", "critic", "autoencoder")
@@ -35,7 +40,7 @@ OPTIMIZED_MODELS = ("dynamics", "reward", "actor", "critic", "autoencoder")
 def optimization_settings(
     optimization: Mapping[str, Mapping[str, float]] | None, legacy_hparams: dict[str, Any]
 ) -> dict[str, dict[str, float]]:
-    """The {learning_rate, grad_clip} settings of each model in OPTIMIZED_MODELS.
+    """The {learning_rate, grad_clip, warmup_updates} settings of each model in OPTIMIZED_MODELS.
 
     Old checkpoints store them as flat <model>_learning_rate and <model>_grad_clip hyperparameters, which are moved
     from legacy_hparams into the result (explicit optimization settings win).
@@ -283,7 +288,18 @@ class SOLDModule(OnlineModule):
             grad_clip = self.optimizer_settings[model_name].grad_clip
             if grad_clip > 0:
                 clip_grad_norm_([param for group in optimizer.param_groups for param in group["params"]], grad_clip)
+            self._warm_up(model_name, optimizer)
             optimizer.step()
+
+    def _warm_up(self, model_name: str, optimizer) -> None:
+        """Scale the learning rate during the model's warmup after a resume (see OptimizerSettings)."""
+        settings = self.optimizer_settings[model_name]
+        if settings.warmup_updates == 0 or self.num_updates_since_restore is None:
+            return
+        scale = min(1.0, (self.num_updates_since_restore + 1) / settings.warmup_updates)
+        self.learning_rates[model_name] = settings.learning_rate * scale
+        for group in optimizer.param_groups:
+            group["lr"] = self.learning_rates[model_name]
 
     def sample_num_context(self) -> int:
         return torch.randint(self.min_num_context, self.max_num_context + 1, (1,)).item()

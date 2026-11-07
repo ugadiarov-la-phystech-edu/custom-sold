@@ -35,7 +35,8 @@ model:
   # logs/version_N/replay_buffer directory exists; True also copies the buffer's files (15 GB) next to the checkpoint.
   save_replay_buffer: False
 
-  optimization:  # Adam learning rate and gradient-norm clip per model.
+  optimization:  # Adam learning rate and gradient-norm clip per model; warmup_updates (default 0) ramps the learning
+    # rate up linearly over that many updates after resuming from a checkpoint.
     dynamics: {learning_rate: 0.0001, grad_clip: 3.0}
     reward: {learning_rate: 0.0001, grad_clip: 10.0}
     actor: {learning_rate: 0.00003, grad_clip: 10.0}

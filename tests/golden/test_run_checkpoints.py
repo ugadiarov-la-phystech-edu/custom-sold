@@ -4,6 +4,7 @@ SOLD_RUN_CHECKPOINTS: a folder of <name>.ckpt files whose <name>.pt references w
 `python -m tests.golden.references --run-checkpoints FOLDER` before the change being checked.
 """
 
+from contextlib import nullcontext
 import os
 from pathlib import Path
 import pytest
@@ -31,8 +32,12 @@ def test_run_checkpoint_gives_the_same_outputs(checkpoint):
 def test_run_checkpoint_resumes_training(checkpoint, tmp_path):
     saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
     num_optimizers = 5 if saved["hyper_parameters"]["finetune_autoencoder"] else 4
-    if len(saved["optimizer_states"]) != num_optimizers:
-        pytest.skip("saved before the autoencoder optimizer was checkpointed (BUGS_AND_PITFALLS.md #17)")
+    # Fine-tuning checkpoints saved before BUGS_AND_PITFALLS.md #17 was fixed resume with a fresh SAVi optimizer.
+    resuming = (
+        pytest.warns(UserWarning, match="start fresh")
+        if len(saved["optimizer_states"]) < num_optimizers
+        else nullcontext()
+    )
     # Two collection epochs of 25 steps: the first 50-step episode ends in the second, which trains. Small buffer and
     # batch and no evaluation, to run on a CPU.
     sold = references.load_sold(
@@ -43,5 +48,6 @@ def test_run_checkpoint_resumes_training(checkpoint, tmp_path):
         eval_freq=10**9,
         save_replay_buffer=False,
     )
-    fit_sold(sold, tmp_path, checkpoint=checkpoint)
+    with resuming:
+        fit_sold(sold, tmp_path, checkpoint=checkpoint)
     assert sold.num_steps == saved["num_steps"] + 50

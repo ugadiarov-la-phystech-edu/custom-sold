@@ -139,6 +139,8 @@ class OnlineModule(nn.Module, ABC):
         self.num_episodes = -1  # Start at -1 to account for the initial reset.
         # Set up by fit().
         self.optimizers: list[Optimizer] = []
+        self.num_updates_since_restore: int | None = None  # Counts gradient updates after resuming (None: fresh run).
+        self.learning_rates: dict[str, float] = {}  # Learning rates subclasses report (e.g. during a warmup).
         self.fused_optimizers = False  # Fused Adam kernels (configure_optimizers reads it).
         self.cudagraphs = False  # Compiled stages replay CUDA graphs.
         self.logger: MetricsWriter | None = None
@@ -263,6 +265,8 @@ class OnlineModule(nn.Module, ABC):
             with self.timings.measure("learn/training_step"):
                 batch = {key: value.to(device) for key, value in batch.items()}
                 outputs = self.training_step(batch, visualize=visualize and index == 0)
+            if self.num_updates_since_restore is not None:
+                self.num_updates_since_restore += 1
         if outputs is not None:
             self.log_round(outputs)
 
@@ -338,6 +342,7 @@ class OnlineModule(nn.Module, ABC):
         with self.measure_gpu("learn/logging"):
             metrics = {"train/" + key: value for key, value in outputs.items() if key.endswith("_loss")}
             metrics |= {f"gradients/{name}": self.gradient_norm(name) for name in self.GRADIENT_NORMS}
+            metrics |= {f"learning_rate/{name}": rate for name, rate in self.learning_rates.items()}
         on_gpu = self.device.type == "cuda"
         if self.timings.enabled:
             if on_gpu:
@@ -404,19 +409,23 @@ class OnlineModule(nn.Module, ABC):
     def restore(self, checkpoint: dict[str, Any]) -> None:
         """Resume training from a checkpoint: weights, optimizer states, counters and the saved replay buffer."""
         self.load_state_dict(checkpoint["state_dict"])
-        if len(checkpoint["optimizer_states"]) != len(self.optimizers):
-            raise ValueError(
-                f"The checkpoint has {len(checkpoint['optimizer_states'])} optimizer states for "
-                f"{len(self.optimizers)} optimizers (BUGS_AND_PITFALLS.md #17)."
-            )
-        for optimizer, state in zip(self.optimizers, checkpoint["optimizer_states"]):
-            # Keep this run's kernel choice; loading moves the step counters to where fused kernels need them.
+        states = checkpoint["optimizer_states"]
+        counts = f"{len(states)} optimizer states for {len(self.optimizers)} optimizers"
+        if len(states) > len(self.optimizers):
+            raise ValueError(f"The checkpoint has {counts}.")
+        if len(states) < len(self.optimizers):  # E.g. fine-tuning runs saved before BUGS_AND_PITFALLS.md #17 was fixed.
+            fresh = len(self.optimizers) - len(states)
+            warnings.warn(f"The checkpoint has {counts}: the last {fresh} start fresh.", stacklevel=2)
+        for optimizer, state in zip(self.optimizers, states):
+            # Keep this run's learning rate and kernel choice; loading moves the step counters to where fused kernels
+            # need them.
             groups = [
-                {**saved, **{key: group[key] for key in ("fused", "foreach") if key in group}}
+                {**saved, **{key: group[key] for key in ("lr", "fused", "foreach") if key in group}}
                 for saved, group in zip(state["param_groups"], optimizer.param_groups)
             ]
             optimizer.load_state_dict({**state, "param_groups": groups})
         self.load_counters(checkpoint)
+        self.num_updates_since_restore = 0
 
         if "replay_buffer_path" in checkpoint:
             self.restore_replay_buffer(checkpoint)
