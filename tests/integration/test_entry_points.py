@@ -4,7 +4,6 @@ from hydra.core.global_hydra import GlobalHydra
 import json
 import os
 import pytest
-import shutil
 from sold import evaluate_sold, generate_dataset, train_autoencoder, train_sold
 import sys
 from tests import fakes
@@ -240,13 +239,9 @@ def test_evaluate_sold(monkeypatch, tmp_path, sold_run):
 def test_evaluate_sold_directory_without_success_info(monkeypatch, tmp_path, sold_run):
     checkpoints = tmp_path / "checkpoints"
     checkpoints.mkdir()
-    _checkpoint_without_replay_buffer(sold_run, checkpoints)
-    shutil.copy(
-        sold_run
-        / "logs/version_0/checkpoints"
-        / sorted(p.name for p in (sold_run / "logs/version_0/checkpoints").glob("sold-steps=0-*.ckpt"))[0],
-        checkpoints,
-    )
+    latest = torch.load(_checkpoint_without_replay_buffer(sold_run, checkpoints), weights_only=False)
+    # A second checkpoint of the directory (the run itself kept only its last one).
+    torch.save({**latest, "num_steps": 0}, checkpoints / "sold-steps=0-episode=0-eval_episode_return=0.0.ckpt")
     original_step = fakes.FakePixelEnv.step
     monkeypatch.setattr(fakes.FakePixelEnv, "step", lambda self, action: original_step(self, action)[:3] + ({},))
     out = tmp_path / "eval"
