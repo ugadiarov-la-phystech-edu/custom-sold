@@ -2,13 +2,14 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 import gym
 import hydra
+import logging
 import numpy as np
 import os
 from pathlib import Path
 import random
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 import shutil
-from sold.data.ring_buffer import RingBufferDataset
+from sold.data.ring_buffer import BOOKKEEPING_FILE, RingBufferDataset
 from sold.data.utils import sample_batches
 from sold.utils.episode_runner import EpisodeRunner
 from sold.utils.logging import MetricsWriter
@@ -20,6 +21,9 @@ import torch
 from torch import nn
 from torch.optim import Optimizer
 from typing import Any
+import warnings
+
+logger = logging.getLogger(__name__)
 
 
 def set_seed(seed: int) -> None:
@@ -111,7 +115,7 @@ class OnlineModule(nn.Module, ABC):
             batch_size (int): Batch size of experience sampled from the replay buffer.
             sequence_length (int): Length of sequences sampled from the replay buffer.
             buffer_capacity (int): Maximum number of steps to store in the replay buffer.
-            save_replay_buffer (bool): Save the replay buffer with each checkpoint.
+            save_replay_buffer (bool): Copy the replay buffer's files next to each checkpoint (see restore).
             profile (bool): Log section durations as timing/*_ms.
         """
         super().__init__()
@@ -351,26 +355,29 @@ class OnlineModule(nn.Module, ABC):
             "num_steps": self.num_steps,
             "num_episodes": self.num_episodes,
         }
-        if self.save_replay_buffer:
-            checkpoint |= self.replay_buffer_checkpoint()
-        torch.save(checkpoint, path)
+        torch.save(checkpoint | self.replay_buffer_checkpoint(), path)
 
     def replay_buffer_checkpoint(self) -> dict[str, Any]:
-        """Copy the replay buffer next to the checkpoints (replacing older copies) and describe it for resuming."""
-        replay_buffer_dir = self.checkpoints_dir / f"replay_buffer-steps={self.num_steps}-episode={self.num_episodes}"
-        if Path(self.replay_buffer.save_path).resolve().exists():
-            shutil.copytree(Path(self.replay_buffer.save_path).resolve(), replay_buffer_dir)
-        # Keep only the copy for this checkpoint (sorting the names as text would misorder 9000 and 10500).
-        for old_replay_buffer_dir in self.checkpoints_dir.glob("replay_buffer-steps=*"):
-            if old_replay_buffer_dir != replay_buffer_dir:
-                shutil.rmtree(old_replay_buffer_dir)
+        """Describe the replay buffer for resuming: its bookkeeping and the directory of its files, which with
+        save_replay_buffer is a copy next to the checkpoints (replacing older copies)."""
+        replay_buffer = self.replay_buffer
+        replay_buffer.save_bookkeeping()  # Now describing every stored episode (add_episode leaves out the newest).
+        replay_buffer_dir = Path(replay_buffer.save_path).resolve()
+        if self.save_replay_buffer:
+            copy_dir = self.checkpoints_dir / f"replay_buffer-steps={self.num_steps}-episode={self.num_episodes}"
+            shutil.copytree(replay_buffer_dir, copy_dir)
+            # Keep only the copy for this checkpoint (sorting the names as text would misorder 9000 and 10500).
+            for old_copy_dir in self.checkpoints_dir.glob("replay_buffer-steps=*"):
+                if old_copy_dir != copy_dir:
+                    shutil.rmtree(old_copy_dir)
+            replay_buffer_dir = copy_dir
         return {
             "replay_buffer_path": replay_buffer_dir,
-            "replay_buffer_capacity": self.replay_buffer.capacity,
-            "replay_buffer_info": self.replay_buffer.info,
-            "replay_buffer_head": self.replay_buffer.head,
-            "replay_buffer_tail": self.replay_buffer.tail,
-            "replay_buffer_episode_boundaries": self.replay_buffer.episode_boundaries,
+            "replay_buffer_capacity": replay_buffer.capacity,
+            "replay_buffer_info": replay_buffer.info,
+            "replay_buffer_head": replay_buffer.head,
+            "replay_buffer_tail": replay_buffer.tail,
+            "replay_buffer_episode_boundaries": replay_buffer.episode_boundaries,
         }
 
     @classmethod
@@ -403,15 +410,37 @@ class OnlineModule(nn.Module, ABC):
             optimizer.load_state_dict({**state, "param_groups": groups})
         self.load_counters(checkpoint)
 
-        replay_buffer_path = Path(checkpoint["replay_buffer_path"]) if "replay_buffer_path" in checkpoint else None
-        if replay_buffer_path is not None and replay_buffer_path.exists():
-            if checkpoint["replay_buffer_info"].fields is None:
-                raise ValueError("Cannot load replay buffer without fields.")
-            self.replay_buffer.load_from_disk_storage(
-                checkpoint["replay_buffer_path"],
-                checkpoint["replay_buffer_capacity"],
-                checkpoint["replay_buffer_info"],
-                checkpoint["replay_buffer_head"],
-                checkpoint["replay_buffer_tail"],
-                checkpoint["replay_buffer_episode_boundaries"],
+        if "replay_buffer_path" in checkpoint:
+            self.restore_replay_buffer(checkpoint)
+
+    def restore_replay_buffer(self, checkpoint: dict[str, Any]) -> None:
+        """Load the replay buffer files the checkpoint points to, described by their bookkeeping.pt (consistent with
+        the files and, for a live buffer, possibly newer than the checkpoint) or, for older checkpoints without that
+        file, by the checkpoint's replay_buffer_* keys."""
+        path = Path(checkpoint["replay_buffer_path"])
+        if not path.exists():
+            warnings.warn(f"The replay buffer {path} no longer exists: resuming with an empty one.", stacklevel=2)
+            return
+        if (path / BOOKKEEPING_FILE).exists():
+            bookkeeping, source = RingBufferDataset.load_bookkeeping(path), str(path / BOOKKEEPING_FILE)
+        else:
+            keys = ("capacity", "info", "head", "tail", "episode_boundaries")
+            bookkeeping, source = {key: checkpoint[f"replay_buffer_{key}"] for key in keys}, "the checkpoint"
+        if bookkeeping["capacity"] != self.replay_buffer.capacity:
+            raise ValueError(
+                f"The saved replay buffer holds {bookkeeping['capacity']} steps, "
+                f"but this run's buffer_capacity is {self.replay_buffer.capacity}."
             )
+        info = bookkeeping["info"]
+        if info.is_empty:  # E.g. the checkpoint from before the first episode ended.
+            return
+        if info.fields is None:
+            raise ValueError("Cannot load replay buffer without fields.")
+        self.replay_buffer.load_from_disk_storage(path, bookkeeping)
+        logger.info(
+            "Restored %d episodes (%d steps) of the replay buffer from %s, described by %s.",
+            info.num_episodes,
+            info.num_timesteps,
+            path,
+            source,
+        )

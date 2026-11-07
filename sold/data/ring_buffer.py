@@ -11,6 +11,7 @@ from typing import Any
 import warnings
 
 logger = logging.getLogger(__name__)
+BOOKKEEPING_FILE = "bookkeeping.pt"  # The ring buffer's indices and statistics, next to its .dat files.
 
 
 class EpisodeDataset(EpisodeDatasetInfoMixin, ABC):
@@ -72,10 +73,15 @@ class EpisodeDataset(EpisodeDatasetInfoMixin, ABC):
         while len(self) + len(next(iter(episode.values()))) > self.capacity:
             self.remove_episode()
             self._update_stats_on_remove()
+        self._before_store()
 
         # Add new episode to storage.
         self.store_episode(episode)
         self._update_stats_on_store(episode)
+
+    def _before_store(self) -> None:
+        """Hook between making room for an episode and storing it."""
+        pass
 
     @abstractmethod
     def store_episode(self, episode: dict[str, list]) -> None:
@@ -210,17 +216,41 @@ class RingBufferDataset(EpisodeDataset):
         total_bytes = bytes_per_step * self.capacity
         logger.info("Total estimated replay buffer size (GB): %.2f", total_bytes / 1e9)
 
-    def load_from_disk_storage(
-        self, load_path: str, capacity: int, info: EpisodeDatasetInfo, head: int, tail: int, episode_boundaries: deque
-    ) -> None:
-        self.capacity = capacity
-        self.info = info
-        self.head = head
-        self.tail = tail
-        self.episode_boundaries = episode_boundaries
+    def _before_store(self) -> None:
+        # The file never describes the episode about to be written: if the process dies during the write, the file and
+        # the .dat files still agree, losing at most that episode.
+        self.save_bookkeeping()
 
-        # Copy files from load path to this replay buffer's storage.
+    def save_bookkeeping(self) -> None:
+        """Write <save_path>/bookkeeping.pt atomically: what load_from_disk_storage needs besides the .dat files."""
         os.makedirs(self.save_path, exist_ok=True)
-        for key in tqdm(info.fields.keys(), desc="Copying EpisodeDataset files"):
+        bookkeeping = {
+            "capacity": self.capacity,
+            "info": self.info,
+            "head": self.head,
+            "tail": self.tail,
+            "episode_boundaries": self.episode_boundaries,
+        }
+        path = os.path.join(self.save_path, BOOKKEEPING_FILE)
+        torch.save(bookkeeping, path + ".tmp")
+        os.replace(path + ".tmp", path)
+
+    @staticmethod
+    def load_bookkeeping(path: str | os.PathLike) -> dict[str, Any]:
+        """The bookkeeping saved in the buffer directory path."""
+        return torch.load(os.path.join(path, BOOKKEEPING_FILE), weights_only=False)
+
+    def load_from_disk_storage(self, load_path: str | os.PathLike, bookkeeping: dict[str, Any] | None = None) -> None:
+        """Copy the buffer files at load_path into save_path and adopt their bookkeeping (read from load_path if not
+        given)."""
+        bookkeeping = self.load_bookkeeping(load_path) if bookkeeping is None else bookkeeping
+        self.capacity = bookkeeping["capacity"]
+        self.info = bookkeeping["info"]
+        self.head = bookkeeping["head"]
+        self.tail = bookkeeping["tail"]
+        self.episode_boundaries = bookkeeping["episode_boundaries"]
+
+        os.makedirs(self.save_path, exist_ok=True)
+        for key in tqdm(self.info.fields.keys(), desc="Copying EpisodeDataset files"):
             shutil.copyfile(os.path.join(load_path, f"{key}.dat"), os.path.join(self.save_path, f"{key}.dat"))
-        self._initialize_from_fields(info.fields, mode="r+")
+        self._initialize_from_fields(self.info.fields, mode="r+")

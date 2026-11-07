@@ -30,7 +30,9 @@ model:
   batch_size: 8  # Batch size for training.
   buffer_capacity: 1250000  # Maximum number of time-steps to store in the replay buffer.
   profile: True  # Log section durations as timing/*_ms.
-  save_replay_buffer: True  # Whether to save the full replay buffer for the latest checkpoint to enable resuming of training.
+  # Checkpoints record the replay buffer's bookkeeping, so a run resumes with its buffer while the old run's
+  # logs/version_N/replay_buffer directory exists; True also copies the buffer's files (15 GB) next to the checkpoint.
+  save_replay_buffer: False
 
   optimization:  # Adam learning rate and gradient-norm clip per model.
     dynamics: {learning_rate: 0.0001, grad_clip: 3.0}

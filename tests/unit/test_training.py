@@ -1,10 +1,14 @@
 """utils/training.py: seeding, summary, the progress bar and the OnlineModule training loop."""
 
+from collections import deque
+import copy
+import logging
 import numpy as np
 import os
 from pathlib import Path
 import pytest
 import random
+from sold.data.ring_buffer import RingBufferDataset
 from sold.utils import training
 from sold.utils.episode_runner import EpisodeRunner
 from sold.utils.profiling import Timings
@@ -236,12 +240,17 @@ def test_fit_keeps_only_the_latest_replay_buffer_copy(fitted):
     _, log_dir = fitted
     copies = sorted(p.name for p in (log_dir / "checkpoints").glob("replay_buffer-steps=*"))
     assert copies == ["replay_buffer-steps=24-episode=3"]
-    assert sorted(os.listdir(log_dir / "checkpoints" / copies[0])) == ["action.dat", "obs.dat", "reward.dat"]
+    copy_dir = log_dir / "checkpoints" / copies[0]
+    assert sorted(os.listdir(copy_dir)) == ["action.dat", "bookkeeping.pt", "obs.dat", "reward.dat"]
     checkpoint = torch.load(sorted((log_dir / "checkpoints").glob("sold-steps=24*.ckpt"))[0], weights_only=False)
     assert checkpoint["num_steps"] == 24 and checkpoint["num_episodes"] == 3
-    assert Path(checkpoint["replay_buffer_path"]).name == copies[0]
+    assert checkpoint["replay_buffer_path"] == copy_dir
     assert checkpoint["replay_buffer_capacity"] == 300 and checkpoint["replay_buffer_info"].num_episodes == 3
     assert set(checkpoint) >= {"state_dict", "optimizer_states", "hyper_parameters"}
+    # The copied file describes the checkpoint's state, like the checkpoint keys.
+    bookkeeping = RingBufferDataset.load_bookkeeping(copy_dir)
+    assert bookkeeping["info"] == checkpoint["replay_buffer_info"] and bookkeeping["capacity"] == 300
+    assert bookkeeping["episode_boundaries"] == checkpoint["replay_buffer_episode_boundaries"]
 
 
 def test_fit_logs_metrics(fitted):
@@ -286,13 +295,37 @@ def test_fit_logs_metrics(fitted):
         assert any(image.startswith(name + "-step=") for image in images), name
 
 
-def test_fit_resumes_from_its_own_checkpoint(fitted, tmp_path):
+def test_fit_resumes_from_its_own_checkpoint(fitted, tmp_path, caplog):
     _, log_dir = fitted
     latest = sorted((log_dir / "checkpoints").glob("*.ckpt"))[-1]
     sold = make_tiny_sold(max_steps=50)
-    fit_sold(sold, tmp_path, checkpoint=latest)
+    with caplog.at_level(logging.INFO, logger="sold.utils.training"):
+        fit_sold(sold, tmp_path, checkpoint=latest)
     assert sold.num_steps == 54 and sold.num_episodes >= 3  # Rounds of 5 steps from step 24, until 50 is reached.
     assert sold.replay_buffer.num_episodes > 3  # The saved buffer (3 episodes) plus the new ones.
+    copy_dir = log_dir / "checkpoints" / "replay_buffer-steps=24-episode=3"
+    assert f"Restored 3 episodes (27 steps) of the replay buffer from {copy_dir}, described by" in caplog.text
+    assert f"described by {copy_dir / 'bookkeeping.pt'}" in caplog.text
+
+
+def test_fit_resumes_with_the_live_replay_buffer_without_a_copy(tmp_path, caplog):
+    sold, logger = _fit(tmp_path / "first", save_replay_buffer=False)
+    checkpoints_dir = Path(logger.log_dir) / "checkpoints"
+    assert not list(checkpoints_dir.glob("replay_buffer-*"))
+    latest = sorted(checkpoints_dir.glob("*.ckpt"))[-1]
+    checkpoint = torch.load(latest, weights_only=False)
+    live_dir = Path(logger.log_dir, "replay_buffer").resolve()
+    assert checkpoint["replay_buffer_path"] == live_dir and checkpoint["replay_buffer_info"].num_episodes == 3
+    assert checkpoint["replay_buffer_capacity"] == 300 and len(checkpoint["replay_buffer_episode_boundaries"]) == 3
+    # The live file is newer than the checkpoint: it was rewritten before the fifth episode was stored.
+    assert RingBufferDataset.load_bookkeeping(live_dir)["info"].num_episodes == 4
+
+    resumed = make_tiny_sold(max_steps=50)
+    with caplog.at_level(logging.INFO, logger="sold.utils.training"):
+        fit_sold(resumed, tmp_path / "second", checkpoint=latest)
+    assert f"Restored 4 episodes (36 steps) of the replay buffer from {live_dir}" in caplog.text
+    assert resumed.num_steps == 54 and resumed.replay_buffer.num_episodes == 4 + 3  # Episodes end at 32, 40 and 48.
+    assert np.array_equal(resumed.replay_buffer.ring_buffer["obs"][:36], sold.replay_buffer.ring_buffer["obs"][:36])
 
 
 def _optimizer_kernels(sold):
@@ -338,7 +371,8 @@ def test_fit_without_saving_replay_buffer_and_with_finetuning(tmp_path):
     assert not list(Path(logger.log_dir, "checkpoints").glob("replay_buffer-*"))
     assert "timing/learn/autoencoder_update_ms" in set().union(*read_metrics(logger.log_dir))
     checkpoint = torch.load(next(Path(logger.log_dir, "checkpoints").glob("*.ckpt")), weights_only=False)
-    assert "replay_buffer_path" not in checkpoint
+    assert checkpoint["num_steps"] == 0 and checkpoint["replay_buffer_info"].is_empty  # Saved before any episode.
+    assert checkpoint["replay_buffer_path"] == Path(logger.log_dir, "replay_buffer").resolve()
 
 
 def test_fit_without_profiling_logs_no_timings(tmp_path):
@@ -366,32 +400,107 @@ def test_restore_rejects_a_wrong_number_of_optimizer_states(tiny_sold):
 def test_restore_without_replay_buffer(tiny_sold, tmp_path):
     tiny_sold.restore(_resume_checkpoint(tiny_sold))
     assert (tiny_sold.num_steps, tiny_sold.num_episodes) == (5, 0)
-    tiny_sold.restore(_resume_checkpoint(tiny_sold, replay_buffer_path=tmp_path / "gone"))
+    with pytest.warns(UserWarning, match="no longer exists: resuming with an empty one"):
+        tiny_sold.restore(_resume_checkpoint(tiny_sold, replay_buffer_path=tmp_path / "gone"))
     assert tiny_sold.replay_buffer is None
+
+
+def _saved_buffer(tmp_path, num_episodes=1, capacity=20):
+    """A buffer at tmp_path/saved holding num_episodes episodes of 5 steps, its bookkeeping.pt up to date."""
+    saved = RingBufferDataset(capacity, 2, 3, save_path=str(tmp_path / "saved"))
+    for index in range(num_episodes):
+        add_episode(saved, make_episode(5, start=10 * index))
+    saved.save_bookkeeping()
+    return saved
+
+
+def _buffer_checkpoint(tiny_sold, saved, **extra):
+    return _resume_checkpoint(
+        tiny_sold,
+        replay_buffer_path=Path(saved.save_path),
+        replay_buffer_capacity=saved.capacity,
+        replay_buffer_info=copy.deepcopy(saved.info),
+        replay_buffer_head=saved.head,
+        replay_buffer_tail=saved.tail,
+        replay_buffer_episode_boundaries=deque(saved.episode_boundaries),
+        **extra,
+    )
 
 
 def test_restore_rejects_buffer_without_fields(tiny_sold, tmp_path):
     from sold.data.info import EpisodeDatasetInfo
 
-    with pytest.raises(ValueError, match="without fields"):
-        tiny_sold.restore(
-            _resume_checkpoint(tiny_sold, replay_buffer_path=tmp_path, replay_buffer_info=EpisodeDatasetInfo())
-        )
-
-
-def _stub_replay_buffer(tiny_sold, tmp_path, save_path):
-    """A module logging under tmp_path whose replay buffer lives at save_path (its checkpoints go to checkpoints/)."""
-    tiny_sold.logger = SimpleNamespace(log_dir=str(tmp_path))
-    tiny_sold.replay_buffer = SimpleNamespace(
-        save_path=str(save_path), capacity=1, info=None, head=0, tail=0, episode_boundaries=[]
+    tiny_sold.replay_buffer = RingBufferDataset(20, 2, 3, save_path=str(tmp_path / "run"))
+    checkpoint = _resume_checkpoint(
+        tiny_sold,
+        replay_buffer_path=tmp_path,
+        replay_buffer_capacity=20,
+        replay_buffer_info=EpisodeDatasetInfo(num_episodes=1),
+        replay_buffer_head=0,
+        replay_buffer_tail=0,
+        replay_buffer_episode_boundaries=deque(),
     )
+    with pytest.raises(ValueError, match="without fields"):
+        tiny_sold.restore(checkpoint)
 
 
-def test_replay_buffer_checkpoint_when_buffer_folder_is_missing(tiny_sold, tmp_path):
-    _stub_replay_buffer(tiny_sold, tmp_path, tmp_path / "missing")
+def test_restore_rejects_a_different_buffer_capacity(tiny_sold, tmp_path):
+    tiny_sold.replay_buffer = RingBufferDataset(30, 2, 3, save_path=str(tmp_path / "run"))
+    with pytest.raises(ValueError, match="holds 20 steps, but this run's buffer_capacity is 30"):
+        tiny_sold.restore(_buffer_checkpoint(tiny_sold, _saved_buffer(tmp_path)))
+
+
+def test_restore_skips_an_empty_saved_buffer(tiny_sold, tmp_path):
+    saved = _saved_buffer(tmp_path, num_episodes=0)  # As the checkpoint of step 0 describes it.
+    tiny_sold.replay_buffer = RingBufferDataset(20, 2, 3, save_path=str(tmp_path / "run"))
+    tiny_sold.restore(_buffer_checkpoint(tiny_sold, saved))
+    assert tiny_sold.replay_buffer.is_empty and tiny_sold.replay_buffer.fields is None
+
+
+# BUGS_AND_PITFALLS.md #4 (fixed).
+def test_resuming_restores_the_saved_replay_buffer(tiny_sold, tmp_path, caplog):
+    saved = _saved_buffer(tmp_path)
+    tiny_sold.replay_buffer = RingBufferDataset(20, 2, 3, save_path=str(tmp_path / "run"))
+    with caplog.at_level(logging.INFO, logger="sold.utils.training"):
+        tiny_sold.restore(_buffer_checkpoint(tiny_sold, saved))
+    assert tiny_sold.replay_buffer.num_episodes == 1 and tiny_sold.replay_buffer.tail == 5
+    assert np.array_equal(tiny_sold.replay_buffer.ring_buffer["obs"], saved.ring_buffer["obs"])
+    assert f"Restored 1 episodes (5 steps) of the replay buffer from {saved.save_path}, described by" in caplog.text
+
+
+def test_restore_prefers_the_buffers_bookkeeping_file_to_the_checkpoint(tiny_sold, tmp_path, caplog):
+    saved = _saved_buffer(tmp_path)
+    checkpoint = _buffer_checkpoint(tiny_sold, saved)  # Describes one episode; the run then stores a second one.
+    add_episode(saved, make_episode(5, start=10))
+    saved.save_bookkeeping()
+    tiny_sold.replay_buffer = RingBufferDataset(20, 2, 3, save_path=str(tmp_path / "run"))
+    with caplog.at_level(logging.INFO, logger="sold.utils.training"):
+        tiny_sold.restore(checkpoint)
+    assert tiny_sold.replay_buffer.num_episodes == 2 and tiny_sold.replay_buffer.tail == 10
+    assert f"described by {saved.save_path}/bookkeeping.pt" in caplog.text
+
+
+def test_restore_falls_back_to_the_checkpoints_bookkeeping(tiny_sold, tmp_path, caplog):
+    """Checkpoints from before bookkeeping.pt existed still resume."""
+    saved = _saved_buffer(tmp_path)
+    checkpoint = _buffer_checkpoint(tiny_sold, saved)
+    add_episode(saved, make_episode(5, start=10))
+    os.remove(Path(saved.save_path, "bookkeeping.pt"))
+    tiny_sold.replay_buffer = RingBufferDataset(20, 2, 3, save_path=str(tmp_path / "run"))
+    with caplog.at_level(logging.INFO, logger="sold.utils.training"):
+        tiny_sold.restore(checkpoint)
+    assert tiny_sold.replay_buffer.num_episodes == 1 and tiny_sold.replay_buffer.tail == 5
+    assert "described by the checkpoint" in caplog.text
+
+
+def test_replay_buffer_checkpoint_points_to_the_live_buffer(tiny_sold, tmp_path):
+    tiny_sold.logger = SimpleNamespace(log_dir=str(tmp_path))
+    tiny_sold.replay_buffer = RingBufferDataset(20, 2, 3, save_path=str(tmp_path / "live"))  # Empty, no files yet.
     checkpoint = tiny_sold.replay_buffer_checkpoint()
-    assert checkpoint["replay_buffer_path"] == tmp_path / "checkpoints" / "replay_buffer-steps=0-episode=-1"
-    assert not checkpoint["replay_buffer_path"].exists() and checkpoint["replay_buffer_capacity"] == 1
+    assert checkpoint["replay_buffer_path"] == (tmp_path / "live").resolve()
+    assert os.listdir(tmp_path / "live") == ["bookkeeping.pt"] and not (tmp_path / "checkpoints").exists()
+    assert checkpoint["replay_buffer_capacity"] == 20 and checkpoint["replay_buffer_info"].is_empty
+    assert RingBufferDataset.load_bookkeeping(checkpoint["replay_buffer_path"])["info"].is_empty
 
 
 def test_checkpoints_dir_is_created_under_log_dir(tiny_sold, tmp_path):
@@ -405,32 +514,22 @@ def test_replay_buffer_checkpoint_replaces_the_previous_copy(tiny_sold, tmp_path
     live.mkdir()
     (live / "obs.dat").write_bytes(b"new")
     (tmp_path / "checkpoints" / "replay_buffer-steps=9000-episode=180").mkdir(parents=True)
-    _stub_replay_buffer(tiny_sold, tmp_path, live)
+    tiny_sold.logger = SimpleNamespace(log_dir=str(tmp_path))
+    tiny_sold.replay_buffer = SimpleNamespace(
+        save_path=str(live),
+        capacity=1,
+        info=None,
+        head=0,
+        tail=0,
+        episode_boundaries=[],
+        save_bookkeeping=lambda: None,
+    )
+    tiny_sold.save_replay_buffer = True
     tiny_sold.num_steps, tiny_sold.num_episodes = 10500, 210
     checkpoint = tiny_sold.replay_buffer_checkpoint()
     assert [p.name for p in (tmp_path / "checkpoints").iterdir()] == ["replay_buffer-steps=10500-episode=210"]
     assert (checkpoint["replay_buffer_path"] / "obs.dat").read_bytes() == b"new"
-
-
-# BUGS_AND_PITFALLS.md #4 (fixed).
-def test_resuming_restores_the_saved_replay_buffer(tiny_sold, tmp_path):
-    from sold.data.ring_buffer import RingBufferDataset
-
-    saved = RingBufferDataset(20, 2, 3, save_path=str(tmp_path / "saved"))
-    add_episode(saved, make_episode(5))
-    checkpoint = _resume_checkpoint(
-        tiny_sold,
-        replay_buffer_path=tmp_path / "saved",
-        replay_buffer_capacity=20,
-        replay_buffer_info=saved.info,
-        replay_buffer_head=saved.head,
-        replay_buffer_tail=saved.tail,
-        replay_buffer_episode_boundaries=saved.episode_boundaries,
-    )
-    tiny_sold.replay_buffer = RingBufferDataset(20, 2, 3, save_path=str(tmp_path / "run"))
-    tiny_sold.restore(checkpoint)
-    assert tiny_sold.replay_buffer.num_episodes == 1 and tiny_sold.replay_buffer.tail == 5
-    assert np.array_equal(tiny_sold.replay_buffer.ring_buffer["obs"], saved.ring_buffer["obs"])
+    assert checkpoint["replay_buffer_capacity"] == 1
 
 
 # BUGS_AND_PITFALLS.md #6 (fixed).

@@ -72,6 +72,9 @@ def test_episode_dataset_info_defaults():
 
 
 # ------------------------------------------------------------------------------ ring buffer
+FILES = ["action.dat", "bookkeeping.pt", "obs.dat", "reward.dat"]
+
+
 @pytest.fixture
 def buffer(tmp_path):
     return RingBufferDataset(capacity=10, batch_size=4, sequence_length=3, save_path=str(tmp_path / "rb"))
@@ -151,20 +154,71 @@ def test_ring_buffer_files_and_load_from_disk_storage(buffer, tmp_path, caplog):
         add_episode(buffer, make_episode(4))
     assert "Total estimated replay buffer size (GB)" in caplog.text
     buffer.ring_buffer["obs"].flush()
-    assert sorted(p.name for p in (tmp_path / "rb").iterdir()) == ["action.dat", "obs.dat", "reward.dat"]
+    assert sorted(p.name for p in (tmp_path / "rb").iterdir()) == FILES
 
     restored = RingBufferDataset(capacity=1, batch_size=4, sequence_length=3, save_path=str(tmp_path / "copy"))
     restored.load_from_disk_storage(
         str(tmp_path / "rb"),
-        buffer.capacity,
-        copy.deepcopy(buffer.info),
-        buffer.head,
-        buffer.tail,
-        deque(buffer.episode_boundaries),
+        {
+            "capacity": buffer.capacity,
+            "info": copy.deepcopy(buffer.info),
+            "head": buffer.head,
+            "tail": buffer.tail,
+            "episode_boundaries": deque(buffer.episode_boundaries),
+        },
     )
     assert restored.capacity == 10 and restored.num_episodes == 1 and restored.tail == 4
     assert np.array_equal(restored.ring_buffer["obs"], buffer.ring_buffer["obs"])
     assert restored.sample()["obs"].shape == (4, 3, 3, 2, 2)
+
+
+def test_ring_buffer_bookkeeping_round_trip(buffer, tmp_path):
+    for start in (0, 10, 20):  # The third episode evicts the first and wraps around.
+        add_episode(buffer, make_episode(4, start=start))
+    buffer.save_bookkeeping()
+    assert sorted(p.name for p in (tmp_path / "rb").iterdir()) == FILES
+    loaded = RingBufferDataset.load_bookkeeping(tmp_path / "rb")
+    assert set(loaded) == {"capacity", "info", "head", "tail", "episode_boundaries"}
+    assert (loaded["capacity"], loaded["head"], loaded["tail"]) == (10, 4, 2)
+    assert type(loaded["episode_boundaries"]) is deque and list(loaded["episode_boundaries"]) == [(4, 8), (8, 12)]
+    assert loaded["info"] == buffer.info and loaded["info"].is_full and loaded["info"].fields == buffer.fields
+
+
+def test_ring_buffer_bookkeeping_describes_the_episodes_stored_before_the_newest(buffer, tmp_path):
+    """add_episode writes the file before storing: if the process dies mid-write, it describes only complete data."""
+
+    def load():
+        return RingBufferDataset.load_bookkeeping(tmp_path / "rb")
+
+    add_episode(buffer, make_episode(4, start=0))
+    assert load()["info"].num_episodes == 0 and load()["info"].fields == buffer.fields
+    add_episode(buffer, make_episode(4, start=10))
+    assert (load()["info"].num_episodes, list(load()["episode_boundaries"])) == (1, [(0, 4)])
+    add_episode(buffer, make_episode(4, start=20))  # Evicts the first episode before writing the file.
+    bookkeeping = load()
+    assert (bookkeeping["head"], bookkeeping["tail"], list(bookkeeping["episode_boundaries"])) == (4, 8, [(4, 8)])
+    assert bookkeeping["info"].num_episodes == 1 and bookkeeping["info"].is_full
+
+    # A buffer "resumed" after the third episode's write was lost: the second episode is intact.
+    buffer.ring_buffer["obs"].flush()
+    restored = RingBufferDataset(capacity=10, batch_size=4, sequence_length=3, save_path=str(tmp_path / "copy"))
+    restored.load_from_disk_storage(tmp_path / "rb")  # Bookkeeping read from the file.
+    assert (restored.num_episodes, restored.head, restored.tail) == (1, 4, 8)
+    assert restored.ring_buffer["obs"][4:8, 0, 0, 0].tolist() == [10, 11, 12, 13]
+
+
+def test_ring_buffer_bookkeeping_is_written_atomically(buffer, tmp_path, monkeypatch):
+    add_episode(buffer, make_episode(4))
+    buffer.save_bookkeeping()
+
+    def failing_save(obj, path):
+        open(path, "wb").write(b"partial")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(torch, "save", failing_save)
+    with pytest.raises(OSError, match="disk full"):
+        add_episode(buffer, make_episode(4, start=10))
+    assert RingBufferDataset.load_bookkeeping(tmp_path / "rb")["info"].num_episodes == 1  # Unchanged.
 
 
 def test_episode_dataset_initializes_storage_from_given_fields():
@@ -190,6 +244,7 @@ def test_episode_dataset_is_abstract(tmp_path):
 
     dataset = Minimal(5, 1)
     dataset._initialize_from_fields(None)
+    dataset._before_store()  # No-op hooks.
     for method in (EpisodeDataset.store_episode, EpisodeDataset.remove_episode):
         with pytest.raises(NotImplementedError):
             method(dataset, *([{}] if method is EpisodeDataset.store_episode else []))

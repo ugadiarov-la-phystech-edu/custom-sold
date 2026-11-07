@@ -30,7 +30,7 @@ A fix turns it into a strict `XPASS` failure, which is the cue to remove the mar
 | 7 | Bug (fixed) | Evaluation | Evaluation never updates the last action |
 | 8 | Bug (fixed) | Environments | `survival` suite imports a module that does not exist |
 | 9 | Pitfall | Environments | Reach episodes are half the configured length |
-| 10 | Pitfall | Disk | Each replay buffer copy is about 15 GB |
+| 10 | Pitfall (mitigated) | Disk | Each replay buffer copy is about 15 GB |
 | 11 | Pitfall (fixed) | Reproducibility | The seed never reaches the environment |
 | 12 | Pitfall (fixed) | Memory | A new MuJoCo environment is created on every reset |
 | 13 | Pitfall (fixed) | Data | Actions are shifted one step between SAVi and SOLD |
@@ -279,7 +279,9 @@ Selecting `suite: survival` raises `ModuleNotFoundError`.
 So Reach episodes end after 25 agent steps, regardless of `max_episode_steps: 50` in `train_sold.yaml:54` and `evaluate_sold.yaml:14`.
 The config value still sizes the transformer attention masks, so nothing crashes, but episode length is not what the config suggests.
 
-### 10. Each replay buffer copy is about 15 GB
+### 10. Each replay buffer copy is about 15 GB (mitigated)
+
+**Status:** mitigated. `save_replay_buffer` now defaults to `False`: every checkpoint records the buffer's bookkeeping (capacity, statistics, head, tail, episode boundaries) and the path of the live buffer directory, which keeps the same bookkeeping in `bookkeeping.pt` (rewritten before each episode is stored, so it only describes fully written episodes, and at each checkpoint). Resuming reads that file, or the checkpoint's keys for older checkpoints, so a run resumes with its buffer as long as the old run's `logs/version_N/replay_buffer` directory exists; `True` still copies the files for runs whose log directory may be deleted.
 
 `buffer_capacity: 1250000` (`configs/train_sold.yaml:23`) at 64×64×3 bytes per frame is about 15.4 GB of memory-mapped data.
 With `save_replay_buffer: True`, the whole buffer is copied at every evaluation (`sold/utils/training.py:243`), which happens every 1500 steps.
