@@ -88,7 +88,9 @@ python train_sold.py compile.mode=null
 A run resumes from one of its checkpoints with `checkpoint=PATH`. Checkpoints record only the replay buffer's bookkeeping
 (also kept in the buffer directory as `bookkeeping.pt`), so the resumed run continues with the old run's buffer as long as
 that run's `logs/version_N/replay_buffer` directory still exists; `model.save_replay_buffer=True` also copies the buffer's
-files (about 15 GB) next to each checkpoint, for runs whose log directory may be deleted.
+files (about 15 GB) next to each checkpoint, for runs whose log directory may be deleted. Checkpoints of older runs do not
+point to their buffer: rebuild its `bookkeeping.pt` with `scripts/rebuild_replay_buffer_bookkeeping.py` and pass the
+directory as `replay_buffer=DIR`.
 
 
 <details>

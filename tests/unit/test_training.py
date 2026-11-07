@@ -328,6 +328,28 @@ def test_fit_resumes_with_the_live_replay_buffer_without_a_copy(tmp_path, caplog
     assert np.array_equal(resumed.replay_buffer.ring_buffer["obs"][:36], sold.replay_buffer.ring_buffer["obs"][:36])
 
 
+def test_fit_resumes_with_a_given_replay_buffer_directory(tmp_path, caplog):
+    # Checkpoints of older runs point to no buffer; replay_buffer= names one with its bookkeeping.pt.
+    sold, logger = _fit(tmp_path / "first", save_replay_buffer=False)
+    latest = sorted((Path(logger.log_dir) / "checkpoints").glob("*.ckpt"))[-1]
+    checkpoint = torch.load(latest, weights_only=False)
+    old = {key: value for key, value in checkpoint.items() if not key.startswith("replay_buffer_")}
+    torch.save(old, tmp_path / "old.ckpt")
+    live_dir = Path(logger.log_dir, "replay_buffer").resolve()
+
+    resumed = make_tiny_sold(max_steps=50)
+    with caplog.at_level(logging.INFO, logger="sold.utils.training"):
+        fit_sold(resumed, tmp_path / "second", checkpoint=tmp_path / "old.ckpt", replay_buffer=str(live_dir))
+    assert f"Restored 4 episodes (36 steps) of the replay buffer from {live_dir}" in caplog.text
+    assert np.array_equal(resumed.replay_buffer.ring_buffer["obs"][:36], sold.replay_buffer.ring_buffer["obs"][:36])
+
+    (live_dir / "bookkeeping.pt").unlink()
+    with pytest.raises(ValueError, match="rebuild the bookkeeping"):
+        fit_sold(make_tiny_sold(), tmp_path / "third", checkpoint=tmp_path / "old.ckpt", replay_buffer=str(live_dir))
+    with pytest.raises(ValueError, match="pass one"):
+        fit_sold(make_tiny_sold(), tmp_path / "fourth", replay_buffer=str(live_dir))
+
+
 def _optimizer_kernels(sold):
     return {(group["fused"], group["foreach"]) for optimizer in sold.optimizers for group in optimizer.param_groups}
 

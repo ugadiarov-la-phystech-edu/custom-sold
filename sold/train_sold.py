@@ -482,6 +482,7 @@ def train(cfg: DictConfig):
         logger,
         device=cfg.device,
         checkpoint=os.path.abspath(cfg.checkpoint) if cfg.checkpoint else None,
+        replay_buffer=os.path.abspath(cfg.replay_buffer) if cfg.replay_buffer else None,
         fused_optimizers=cfg.fused_optimizers,
         compile_mode=cfg.compile.mode,
         compile_stages=cfg.compile.stages,

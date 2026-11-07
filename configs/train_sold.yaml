@@ -6,7 +6,8 @@ defaults:
   - _self_
   - preset: null  # Run setup from configs/preset/, e.g. preset=pick_red_finetune.
 
-checkpoint: ""
+checkpoint: ""  # A checkpoint to resume from.
+replay_buffer: ""  # With checkpoint: resume with this buffer directory (and its bookkeeping.pt) instead.
 experiment: "my_experiment"
 seed: 42
 device: auto  # "cuda", "cpu" or "auto" (the GPU when there is one).

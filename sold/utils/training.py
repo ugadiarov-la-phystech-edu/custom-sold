@@ -176,15 +176,20 @@ class OnlineModule(nn.Module, ABC):
         logger: MetricsWriter,
         device: str | torch.device = "auto",
         checkpoint: str | None = None,
+        replay_buffer: str | None = None,
         fused_optimizers: bool | None = None,
         compile_mode: str | None = None,
         compile_stages: Sequence[str] | None = None,
     ) -> None:
         """Train for max_steps environment steps, logging to logger; checkpoint resumes a saved run.
 
+        replay_buffer: a buffer directory (with its bookkeeping.pt) to resume with instead of the one the checkpoint
+        points to, e.g. for checkpoints of older runs (see scripts/rebuild_replay_buffer_bookkeeping.py).
         fused_optimizers: fused optimizer kernels; None uses them on GPUs. compile_mode: torch.compile mode of the
         compile_stages (all STAGES if None); None trains eagerly.
         """
+        if replay_buffer is not None and checkpoint is None:
+            raise ValueError("replay_buffer resumes a checkpoint: pass one.")
         self.to(resolve_device(device))
         self.fused_optimizers = self.device.type == "cuda" if fused_optimizers is None else fused_optimizers
         self.train()
@@ -194,7 +199,10 @@ class OnlineModule(nn.Module, ABC):
         )
         self.optimizers = self.configure_optimizers()
         if checkpoint is not None:
-            self.restore(torch.load(checkpoint, map_location=self.device, weights_only=False))
+            saved = torch.load(checkpoint, map_location=self.device, weights_only=False)
+            if replay_buffer is not None:
+                saved["replay_buffer_path"] = replay_buffer
+            self.restore(saved)
         if compile_mode is not None:  # After moving and restoring: CUDA graphs keep the parameters' memory.
             self.compile_stages(compile_mode, compile_stages)
         self.runner.done = True  # Start with a new episode.
@@ -423,9 +431,14 @@ class OnlineModule(nn.Module, ABC):
             return
         if (path / BOOKKEEPING_FILE).exists():
             bookkeeping, source = RingBufferDataset.load_bookkeeping(path), str(path / BOOKKEEPING_FILE)
-        else:
+        elif "replay_buffer_info" in checkpoint:
             keys = ("capacity", "info", "head", "tail", "episode_boundaries")
             bookkeeping, source = {key: checkpoint[f"replay_buffer_{key}"] for key in keys}, "the checkpoint"
+        else:
+            raise ValueError(
+                f"{path} has no {BOOKKEEPING_FILE} and the checkpoint does not describe the replay buffer: rebuild "
+                "the bookkeeping with scripts/rebuild_replay_buffer_bookkeeping.py."
+            )
         if bookkeeping["capacity"] != self.replay_buffer.capacity:
             raise ValueError(
                 f"The saved replay buffer holds {bookkeeping['capacity']} steps, "
