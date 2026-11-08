@@ -89,7 +89,7 @@ def collect(args, cfg, env_cfg) -> None:
             if policy is None:
                 action = torch.from_numpy(env.action_space.sample().astype(np.float32))
             else:
-                action = policy._policy(obs, is_first=first, mode="train").cpu()
+                action = policy._policy(obs[None], is_first=first, mode="train")[0].cpu()  # A batch of one env.
             obs, reward, done, _ = env.step(action)
             first = False
             episode["obs"].append(obs.numpy())
