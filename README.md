@@ -84,6 +84,9 @@ CPU, or to debug), run:
 python train_sold.py compile.mode=null
 ```
 `compile.mode=default` compiles without CUDA graphs; `compile.stages` limits it to some stages (see `SOLDModule.STAGES`).
+`autocast.dtype=bfloat16` runs the matmuls, convolutions and attention of the stages in `autocast.stages` in bfloat16
+(all but SAVi's encoding by default); distributions, losses, returns, parameters and optimizer states stay float32.
+It is off by default: its effect on learning curves has not been compared with float32 runs yet.
 
 A checkpoint is written after every evaluation (`model.eval_freq` steps) and replaces the run's earlier ones;
 `model.keep_last_checkpoint_only=False` keeps them all. A run resumes from one of its checkpoints with `checkpoint=PATH`.
