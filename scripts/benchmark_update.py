@@ -1,11 +1,12 @@
 """Time SOLD's training update on a synthetic batch, eagerly or with compiled training stages.
 
-    python scripts/benchmark_update.py [--compile-mode MODE] [--compile-stages a,b] [--no-fused] [--warmup N]
-                                       [--updates N] [HYDRA_OVERRIDES...]
+    python scripts/benchmark_update.py [--compile-mode MODE] [--compile-stages a,b] [--autocast bfloat16]
+                                       [--no-fused] [--warmup N] [--updates N] [HYDRA_OVERRIDES...]
 
 The model comes from configs/train_sold.yaml with preset=push_red (the PushRed runs' 4-layer setup) and the given
 overrides, with a stub environment of the run's action space: no environment, replay buffer or logger is needed.
-Prints the compile time, the milliseconds per update, the per-stage timings and torch.compile's counters.
+Prints the compile time, the milliseconds per update, the per-stage timings, torch.compile's counters and the losses of
+one more update.
 Run one mode per process (compiled code is cached per process).
 """
 
@@ -43,6 +44,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--compile-mode", default=None, help='e.g. "default" or "reduce-overhead"; eager if unset')
     parser.add_argument("--compile-stages", default=None, help="comma-separated stages; all if unset")
+    parser.add_argument("--autocast", default=None, help='"bfloat16": autocast of the config\'s autocast.stages')
     parser.add_argument("--no-fused", action="store_true", help="unfused Adam")
     parser.add_argument("--warmup", type=int, default=10, help="untimed updates first (they compile)")
     parser.add_argument("--updates", type=int, default=50, help="timed updates")
@@ -68,6 +70,8 @@ def main() -> None:
     stages = args.compile_stages.split(",") if args.compile_stages else None
     if args.compile_mode is not None:
         sold.compile_stages(args.compile_mode, stages)
+    if args.autocast is not None:  # After compiling, as in fit.
+        sold.autocast_stages(args.autocast, cfg.autocast.stages)
     batch = synthetic_batch(sold, image_size, args.action_dim, device)
 
     def run(num_updates: int) -> float:
@@ -90,7 +94,7 @@ def main() -> None:
     from torch._dynamo.utils import counters
 
     compiled = (stages or "all") if args.compile_mode else "-"
-    print(f"mode={args.compile_mode} stages={compiled} fused={sold.fused_optimizers}")
+    print(f"mode={args.compile_mode} stages={compiled} autocast={args.autocast} fused={sold.fused_optimizers}")
     print(f"first update {first:.1f} s (compiles), then {per_update * 1000:.1f} ms per update")
     for name, ms in sorted(stage_ms.items()):
         print(f"  {name:28s} {ms:8.1f} ms")
@@ -98,6 +102,12 @@ def main() -> None:
     print(f"cudagraph skips: {dict(counters['inductor']).get('cudagraph_skips', 0)}")
     if device.type == "cuda":
         print(f"peak memory {torch.cuda.max_memory_allocated() / 2**30:.1f} GB")
+
+    if sold.cudagraphs:
+        torch.compiler.cudagraph_mark_step_begin()
+    torch.manual_seed(0)  # The same random numbers in every mode (up to compiled code's own).
+    losses = {key: value.item() for key, value in sold.training_step(batch).items() if key.endswith("_loss")}
+    print("losses of one more update: " + ", ".join(f"{key} {value:.5g}" for key, value in sorted(losses.items())))
 
 
 if __name__ == "__main__":
