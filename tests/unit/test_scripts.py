@@ -244,6 +244,16 @@ def test_train_sold_compiles_with_cuda_graphs_by_default():
     assert cfg.compile.mode == "reduce-overhead" and cfg.compile.stages is None
 
 
+def test_train_sold_trains_in_float32_by_default():
+    from sold.train_sold import SOLDModule
+
+    with initialize_config_dir(config_dir=str(CONFIGS_DIR), version_base=None):
+        cfg = compose("train_sold")
+    assert cfg.autocast.dtype is None
+    # With bfloat16, SAVi's encoding stays float32: slots are the same in training and action selection.
+    assert set(cfg.autocast.stages) == set(SOLDModule.STAGES) - {"autoencoder", "encode"}
+
+
 # ---------------------------------------------------------------------------------- all scripts
 @pytest.mark.parametrize("environment", ["reach_red", "push_red", "pick_red"])
 def test_training_and_evaluation_share_the_environment_configs(environment):

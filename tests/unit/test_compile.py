@@ -31,15 +31,15 @@ def _steps(sold, num_steps, device="cpu"):
     return losses, gradients
 
 
-def _assert_same_training(actual, expected):
+def _assert_same_training(actual, expected, rtol=1e-3, atol=1e-5):
     actual_losses, actual_gradients = actual
     expected_losses, expected_gradients = expected
     assert actual_gradients.keys() == expected_gradients.keys()
     for name, reference in expected_gradients.items():  # Relative to the norm: summation orders differ.
-        assert (actual_gradients[name] - reference).norm() <= 1e-3 * reference.norm() + 1e-6, name
+        assert (actual_gradients[name] - reference).norm() <= rtol * reference.norm() + 1e-6, name
     for step, (losses, reference) in enumerate(zip(actual_losses, expected_losses)):
         for key in reference:
-            assert torch.allclose(losses[key], reference[key], rtol=1e-3, atol=1e-5), f"step {step}: {key}"
+            assert torch.allclose(losses[key], reference[key], rtol=rtol, atol=atol), f"step {step}: {key}"
 
 
 @pytest.mark.parametrize(

@@ -43,6 +43,22 @@ def resolve_device(device: str | torch.device) -> torch.device:
     return torch.device(device)
 
 
+def _autocast(method, device_type: str):
+    """method run under bfloat16 autocast, with its floating-point tensor outputs (also in dicts) cast to float32."""
+
+    def to_float32(output):
+        if isinstance(output, dict):
+            return {key: to_float32(value) for key, value in output.items()}
+        return output.float() if output.is_floating_point() else output
+
+    def autocast_method(*args, **kwargs):
+        with torch.autocast(device_type, dtype=torch.bfloat16):
+            output = method(*args, **kwargs)
+        return to_float32(output)
+
+    return autocast_method
+
+
 def print_summary(cfg):
     color, attrs = "magenta", ["bold"]
 
@@ -190,13 +206,16 @@ class OnlineModule(nn.Module, ABC):
         fused_optimizers: bool | None = None,
         compile_mode: str | None = None,
         compile_stages: Sequence[str] | None = None,
+        autocast_dtype: str | None = None,
+        autocast_stages: Sequence[str] | None = None,
     ) -> None:
         """Train for max_steps environment steps, logging to logger; checkpoint resumes a saved run.
 
         replay_buffer: a buffer directory (with its bookkeeping.pt) to resume with instead of the one the checkpoint
         points to, e.g. for checkpoints of older runs (see scripts/rebuild_replay_buffer_bookkeeping.py).
         fused_optimizers: fused optimizer kernels; None uses them on GPUs. compile_mode: torch.compile mode of the
-        compile_stages (all STAGES if None); None trains eagerly.
+        compile_stages (all STAGES if None); None trains eagerly. autocast_dtype: "bfloat16" runs the autocast_stages
+        (all STAGES if None) in mixed precision (see autocast_stages); None trains in float32.
         """
         if replay_buffer is not None and checkpoint is None:
             raise ValueError("replay_buffer resumes a checkpoint: pass one.")
@@ -215,6 +234,8 @@ class OnlineModule(nn.Module, ABC):
             self.restore(saved)
         if compile_mode is not None:  # After moving and restoring: CUDA graphs keep the parameters' memory.
             self.compile_stages(compile_mode, compile_stages)
+        if autocast_dtype is not None:
+            self.autocast_stages(autocast_dtype, autocast_stages)
         self.runner.done = True  # Start with a new episode.
         self.last_timings_log = (time.perf_counter(), self.num_steps)
 
@@ -296,14 +317,30 @@ class OnlineModule(nn.Module, ABC):
 
     def compile_stages(self, mode: str, stages: Sequence[str] | None = None) -> None:
         """Replace the _<stage>_stage methods of stages (all STAGES if None) by their torch.compile'd versions."""
-        stages = self.STAGES if stages is None else tuple(stages)
-        if unknown := set(stages) - set(self.STAGES):
-            raise ValueError(f"Unknown stages {sorted(unknown)}; expected some of {self.STAGES}.")
-        for stage in stages:
+        for stage in self._stage_names(stages):
             method = getattr(self, f"_{stage}_stage")
             # fullgraph: a graph break raises instead of silently running eagerly.
             setattr(self, f"_{stage}_stage", torch.compile(method, mode=mode, fullgraph=True, dynamic=False))
         self.cudagraphs = mode in ("reduce-overhead", "max-autotune")
+
+    def autocast_stages(self, dtype: str, stages: Sequence[str] | None = None) -> None:
+        """Run the _<stage>_stage methods of stages (all STAGES if None) under autocast to dtype ("bfloat16").
+
+        Autocast runs matmuls, convolutions and attention in bfloat16; parameters, gradients and optimizer states stay
+        float32, and the stages' floating-point outputs are cast back to float32. Call it on the final device and after
+        compile_stages: compiled code is traced with the autocast around it (and guarded on it), whereas compiling the
+        wrappers would cache every stage under the wrapper's one code object.
+        """
+        if dtype != "bfloat16":  # float16 would need loss scaling.
+            raise ValueError(f"Unsupported autocast dtype {dtype!r}; expected 'bfloat16'.")
+        for stage in self._stage_names(stages):
+            setattr(self, f"_{stage}_stage", _autocast(getattr(self, f"_{stage}_stage"), self.device.type))
+
+    def _stage_names(self, stages: Sequence[str] | None) -> tuple[str, ...]:
+        stages = self.STAGES if stages is None else tuple(stages)
+        if unknown := set(stages) - set(self.STAGES):
+            raise ValueError(f"Unknown stages {sorted(unknown)}; expected some of {self.STAGES}.")
+        return stages
 
     def _policy(self, obs: torch.Tensor, is_first: bool, mode: str) -> torch.Tensor:
         if self.cudagraphs:  # Outputs of earlier replays are copied out by now.

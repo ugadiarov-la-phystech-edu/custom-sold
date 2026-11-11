@@ -2,6 +2,7 @@
 
 from hydra.core.global_hydra import GlobalHydra
 import json
+import math
 import os
 import pytest
 from sold import evaluate_sold, generate_dataset, train_autoencoder, train_sold
@@ -181,6 +182,24 @@ def test_train_sold_with_parallel_environments(monkeypatch, tmp_path, savi_check
     records = [json.loads(line) for line in open(next(tmp_path.glob("logs/version_0/metrics/metrics.jsonl")))]
     assert max(record["step"] for record in records) >= 30 and any("eval/episode_return" in r for r in records)
     assert next(tmp_path.glob("logs/version_0/checkpoints/*.ckpt"))
+
+
+def test_train_sold_with_bfloat16_autocast(monkeypatch, tmp_path, savi_checkpoint):
+    calls = []
+    autocast_stages = train_sold.SOLDModule.autocast_stages
+
+    def recording_autocast_stages(self, dtype, stages):
+        calls.append((dtype, list(stages)))
+        autocast_stages(self, dtype, stages)
+
+    monkeypatch.setattr(train_sold.SOLDModule, "autocast_stages", recording_autocast_stages)
+    run_entry_point(
+        monkeypatch, train_sold.train, sold_overrides(tmp_path, savi_checkpoint, **{"autocast.dtype": "bfloat16"})
+    )
+    assert calls == [("bfloat16", ["dynamics_loss", "reward_loss", "imagination", "actor_loss", "critic_loss", "act"])]
+    records = read_metrics(tmp_path / "logs/version_0")
+    losses = [record["train/actor_loss"] for record in records if "train/actor_loss" in record]
+    assert losses and all(math.isfinite(loss) for loss in losses)
 
 
 def test_train_sold_with_wandb(monkeypatch, tmp_path, savi_checkpoint):

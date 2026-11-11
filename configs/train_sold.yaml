@@ -19,6 +19,10 @@ compile:  # torch.compile of the training stages (SOLDModule.STAGES); the first 
   # graphs; null: no compilation, plain (eager) PyTorch, e.g. on a CPU, where compiling only costs time, or to debug.
   mode: reduce-overhead
   stages: null  # A list of stages to compile; null compiles all of them.
+autocast:  # Mixed precision: the stages' matmuls, convolutions and attention in bfloat16; distributions, losses,
+  # returns, Moments, parameters, gradients and optimizer states in float32.
+  dtype: null  # bfloat16, or null: float32 throughout.
+  stages: [dynamics_loss, reward_loss, imagination, actor_loss, critic_loss, act]  # SAVi's encoding stays float32.
 
 model:
   _target_: sold.train_sold.SOLDModule

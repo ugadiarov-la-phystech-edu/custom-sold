@@ -530,6 +530,8 @@ def train(cfg: DictConfig):
             fused_optimizers=cfg.fused_optimizers,
             compile_mode=cfg.compile.mode,
             compile_stages=cfg.compile.stages,
+            autocast_dtype=cfg.autocast.dtype,
+            autocast_stages=cfg.autocast.stages,
         )
     finally:
         sold.env.close()
