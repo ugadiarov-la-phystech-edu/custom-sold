@@ -104,7 +104,7 @@ class ScalarPredictor(Predictor):
         )
 
     def forward(self, slots: torch.Tensor, start: int = 0) -> D.Distribution:
-        loc = super().forward(slots, start=start)
+        loc = super().forward(slots, start=start).float()  # Distributions in float32, also under autocast.
         return D.Normal(loc, 1.0, validate_args=False)
 
 
@@ -147,7 +147,7 @@ class GaussianPredictor(Predictor):
         self.register_buffer("upper_bound", torch.as_tensor(upper_bound, dtype=torch.float32), persistent=False)
 
     def forward(self, slots: torch.Tensor, start: int = 0, index: torch.Tensor | None = None) -> D.Distribution:
-        x = super().forward(slots, start=start, index=index)
+        x = super().forward(slots, start=start, index=index).float()  # Distributions in float32, also under autocast.
         mean_, std_ = x.chunk(2, -1)
         mean_ = torch.clamp(mean_, self.lower_bound, self.upper_bound)
         std = (self.max_std - self.min_std) * torch.sigmoid(std_ + self.init_std) + self.min_std

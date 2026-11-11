@@ -25,8 +25,8 @@ class TwoHotEncodingDistribution:
         transfwd: Callable[[Tensor], Tensor] = symlog,
         transbwd: Callable[[Tensor], Tensor] = symexp,
     ):
-        self.logits = logits
-        self.probs = F.softmax(logits, dim=-1)
+        self.logits = logits.float()  # Softmax and log-probabilities in float32, also under autocast.
+        self.probs = F.softmax(self.logits, dim=-1)
         self.dims = tuple([-x for x in range(1, dims + 1)])
         self.bins = torch.linspace(low, high, logits.shape[-1], device=logits.device)
         self.low = low
