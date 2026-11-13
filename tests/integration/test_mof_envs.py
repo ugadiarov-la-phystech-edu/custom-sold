@@ -87,3 +87,29 @@ def test_vector_env_of_real_environments():
         assert torch.equal(again.reset(), first)  # The seed makes the workers' scenes reproducible.
     finally:
         again.close()
+
+
+@pytest.mark.parametrize("reveal", ["stream", "full"])
+def test_reach_multicolor_streams_its_instruction_into_the_memory(reveal):
+    pytest.importorskip("multi_object_fetch.language")
+    language = {"memory_length": 8, "repeat_task_every": 20, "reveal": reveal}
+    env = envs.make_env("mof", "ReachMulticolor_2to2Distractors_Dense-v1", (64, 64), 50, 2, seed=0, language=language)
+    obs, done, steps, memories = env.reset(), False, 0, []
+    memories.append(obs["tokens"].tolist())
+    stream = env.env.env.env.env  # VariableDistractorsWrapper > Pixels > LanguageMemory > LanguageWrapper.
+    ids = np.atleast_1d(stream.token_cache[stream.env.unwrapped.instruction]).tolist()
+    padded = ids + [0] * (8 - len(ids))
+    # The frames are plain renders: the wrapper does not draw the instruction on them.
+    rerendered = stream.env.unwrapped.render(mode="rgb_array", size=(64, 64))
+    assert torch.equal(obs["image"], torch.from_numpy(np.ascontiguousarray(np.moveaxis(rerendered, -1, 0))))
+    while not done:
+        obs, _, done, info = env.step(torch.zeros(env.action_space.shape))
+        memories.append(obs["tokens"].tolist())
+        steps += 1
+    assert steps == 50  # Multicolor episodes last 100 simulator steps.
+    assert "target_color" in info and obs["tokens"].dtype == torch.int64
+    if reveal == "full":
+        assert memories == [padded] * 51
+    else:
+        assert memories[0] == padded[:1] + [0] * 7 and memories[len(ids) - 1] == padded
+        assert all(memory == padded for memory in memories[len(ids) - 1 :])  # Repeats at steps 20 and 40.

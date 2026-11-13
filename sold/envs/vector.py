@@ -1,10 +1,11 @@
-"""Batches of environments: reset and step take and return one entry per environment.
+"""Batches of environments: reset and step take and return one entry per environment (observations as tensors, or dicts
+of them for dict observations such as {"image", "tokens"}).
 
 SingleEnv runs one environment in-process as a batch of one; VectorEnv runs each environment in its own process, so that
 their steps run in parallel. Both expose num_envs, the single environment's action_space and max_episode_steps.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 import gym
 import multiprocessing
 from multiprocessing.connection import Connection
@@ -27,14 +28,29 @@ class SingleEnv:
     def __getattr__(self, name: str) -> Any:
         return getattr(self.env, name)
 
-    def reset(self) -> torch.Tensor:
+    def reset(self) -> Any:
         """The first observations, shape (1, ...)."""
-        return self.env.reset().unsqueeze(0)
+        return stack_observations([self.env.reset()])
 
-    def step(self, actions: torch.Tensor) -> tuple[torch.Tensor, list[float], list[bool], list[dict[str, Any]]]:
+    def step(self, actions: torch.Tensor) -> tuple[Any, list[float], list[bool], list[dict[str, Any]]]:
         """actions: (1, action_dim). Returns the observations (1, ...) and lists of the rewards, dones and infos."""
         obs, reward, done, info = self.env.step(actions[0])
-        return obs.unsqueeze(0), [reward], [done], [info]
+        return stack_observations([obs]), [reward], [done], [info]
+
+
+def stack_observations(observations: Sequence[Any]) -> Any:
+    """A batch of the environments' observations (tensors or numpy arrays): a tensor, or a dict of them for dict
+    observations."""
+    if isinstance(observations[0], dict):
+        return {key: stack_observations([obs[key] for obs in observations]) for key in observations[0]}
+    if isinstance(observations[0], torch.Tensor):
+        return torch.stack(list(observations))
+    return torch.from_numpy(np.stack(observations))
+
+
+def to_numpy(obs: Any) -> Any:
+    """An observation (a tensor or a dict of them) as numpy arrays, to send between processes."""
+    return {key: value.numpy() for key, value in obs.items()} if isinstance(obs, dict) else obs.numpy()
 
 
 def env_worker(connection: Connection, env_factory: Callable[..., gym.Env], seed: int) -> None:
@@ -53,10 +69,10 @@ def env_worker(connection: Connection, env_factory: Callable[..., gym.Env], seed
         while True:
             command, data = connection.recv()
             if command == "reset":
-                connection.send(("ok", env.reset().numpy()))
+                connection.send(("ok", to_numpy(env.reset())))
             elif command == "step":
                 obs, reward, done, info = env.step(torch.from_numpy(data))
-                connection.send(("ok", (obs.numpy(), reward, done, info)))
+                connection.send(("ok", (to_numpy(obs), reward, done, info)))
             elif command == "close":
                 env.close()
                 connection.send(("ok", None))
@@ -105,19 +121,19 @@ class VectorEnv:
             results.append(result)
         return results
 
-    def reset(self) -> torch.Tensor:
+    def reset(self) -> Any:
         """The first observations, (num_envs, ...)."""
         for connection in self.connections:
             connection.send(("reset", None))
-        return torch.from_numpy(np.stack(self._gather()))
+        return stack_observations(self._gather())
 
-    def step(self, actions: torch.Tensor) -> tuple[torch.Tensor, list[float], list[bool], list[dict[str, Any]]]:
+    def step(self, actions: torch.Tensor) -> tuple[Any, list[float], list[bool], list[dict[str, Any]]]:
         """actions: (num_envs, action_dim). Returns the observations (num_envs, ...) and lists of the rewards, dones and
         infos."""
         for connection, action in zip(self.connections, actions.detach().cpu().numpy()):
             connection.send(("step", action))
         obs, rewards, dones, infos = zip(*self._gather())
-        return torch.from_numpy(np.stack(obs)), list(rewards), list(dones), list(infos)
+        return stack_observations(obs), list(rewards), list(dones), list(infos)
 
     def close(self) -> None:
         """Close the environments and end the processes (terminating those that do not end within 10 s)."""

@@ -6,6 +6,7 @@ import os
 import pytest
 from sold import envs
 from sold.envs.wrappers.action_repeat import ActionRepeat
+from sold.envs.wrappers.language import LanguageMemory
 from sold.envs.wrappers.pixels import Pixels
 from sold.envs.wrappers.time_limit import TimeLimit
 from sold.envs.wrappers.to_tensor import ToTensor
@@ -62,7 +63,8 @@ def test_pixels_renders_multi_object_fetch_at_target_size():
 
         @property
         def unwrapped(self):
-            concrete = type("ConcreteMof", (MultiObjectFetchEnv,), {"success": lambda self: False})
+            abstract = {name: lambda self: None for name in MultiObjectFetchEnv.__abstractmethods__}
+            concrete = type("ConcreteMof", (MultiObjectFetchEnv,), abstract)
             return concrete.__new__(concrete)
 
         def render(self, mode="rgb_array", size=None):
@@ -74,6 +76,17 @@ def test_pixels_renders_multi_object_fetch_at_target_size():
     assert FakeMof.render_sizes == [(5, 7)]
 
 
+def test_pixels_keeps_the_instruction_memory():
+    memory = LanguageMemory(fakes.FakeLanguageWrapper(fakes.FakePixelEnv()), memory_length=8)
+    env = Pixels(memory, image_size=(8, 6))
+    obs = env.reset()
+    assert set(obs) == {"image", "tokens"} and obs["image"].shape == (3, 8, 6) and obs["tokens"][0] == 1535
+    obs, _, _, info = env.step(np.ones(2))
+    assert obs["image"].shape == (3, 8, 6) and obs["tokens"][:2].tolist() == [1535, 8] and "success" in info
+    assert set(env.observation_space.spaces) == {"image", "tokens"}
+    assert env.observation_space["image"].shape == (3, 8, 6) and env.observation_space["tokens"].shape == (8,)
+
+
 def test_to_tensor_converts_observations_and_actions():
     env = ToTensor(Pixels(fakes.FakePixelEnv(), (4, 4)))
     obs = env.reset()
@@ -81,6 +94,13 @@ def test_to_tensor_converts_observations_and_actions():
     obs, _, _, _ = env.step(torch.ones(2, requires_grad=True))
     assert isinstance(obs, torch.Tensor)
     assert isinstance(env.unwrapped.actions[-1], np.ndarray)
+
+
+def test_to_tensor_converts_dict_observations():
+    env = ToTensor(Pixels(LanguageMemory(fakes.FakeLanguageWrapper(fakes.FakePixelEnv()), 8), (4, 4)))
+    for obs in (env.reset(), env.step(torch.ones(2))[0]):
+        assert obs["image"].shape == (3, 4, 4) and obs["image"].dtype == torch.uint8
+        assert obs["tokens"].shape == (8,) and obs["tokens"].dtype == torch.int64
 
 
 def test_make_env_gym_suite_builds_the_wrapper_stack():
@@ -95,6 +115,28 @@ def test_make_env_gym_suite_builds_the_wrapper_stack():
     assert steps == 5 and env.unwrapped.t == 10 and obs.dtype == torch.uint8
 
 
+def test_make_env_gym_suite_streams_the_instruction_into_a_memory(fake_language):
+    env = envs.make_env("gym", "FakePixel-v0", (16, 16), 5, 2, language={"memory_length": 8, "repeat_task_every": 9})
+    pixels, memory = env.env, env.env.env
+    assert isinstance(pixels, Pixels) and isinstance(memory, LanguageMemory) and memory.memory_length == 8
+    stream = memory.env
+    assert isinstance(stream, fakes.FakeLanguageWrapper) and not stream.visualize and stream.repeat_task_every == 9
+    assert isinstance(stream.env, TimeLimit) and isinstance(stream.env.env, ActionRepeat)  # One token per agent step.
+    obs = env.reset()
+    assert obs["image"].shape == (3, 16, 16) and obs["tokens"].tolist() == [1535] + [0] * 7
+    obs = env.step(torch.zeros(2))[0]
+    assert obs["tokens"][:2].tolist() == [1535, 8] and stream.env.env.unwrapped.t == 2
+
+
+def test_make_env_without_language_for_an_empty_mapping():
+    assert envs.make_env("gym", "FakePixel-v0", (8, 8), 5, 1, language={}).reset().shape == (3, 8, 8)
+
+
+def test_make_env_language_needs_the_gym_or_mof_suite():
+    with pytest.raises(ValueError, match="Streamed instructions need the 'gym' or 'mof' suite"):
+        envs.make_env("dmcontrol", "cheetah-run", (8, 8), 5, 1, language={"memory_length": 8})
+
+
 def test_make_env_rejects_unknown_suite():
     with pytest.raises(ValueError, match="Unsupported environment suite"):
         envs.make_env("atari", "x", (8, 8), 5, 1)
@@ -105,7 +147,7 @@ def test_make_env_mof_suite(monkeypatch):
 
     created = []
 
-    def fake_make_gym_env(name, image_size, max_episode_steps, action_repeat, seed):
+    def fake_make_gym_env(name, image_size, max_episode_steps, action_repeat, seed, language=None):
         created.append((name, image_size, max_episode_steps, action_repeat, seed))
         return Pixels(TimeLimit(fakes.FakePixelEnv(), max_episode_steps), image_size)
 
@@ -131,10 +173,26 @@ def test_make_env_mof_suite_without_seed(monkeypatch):
     monkeypatch.setattr(
         from_mof,
         "make_gym_env",
-        lambda name, size, steps, repeat, seed: (seeds.append(seed), Pixels(fakes.FakePixelEnv(), size))[1],
+        lambda name, size, steps, repeat, seed, language: (seeds.append(seed), Pixels(fakes.FakePixelEnv(), size))[1],
     )
     envs.make_env("mof", "PushRed_2to2Distractors_Dense-v1", (8, 8), 50, 2)
     assert seeds == [None]
+
+
+def test_make_env_mof_suite_passes_the_language_to_every_variant(monkeypatch):
+    import sold.envs.from_mof as from_mof
+
+    languages = []
+
+    def fake_make_gym_env(name, image_size, max_episode_steps, action_repeat, seed, language):
+        languages.append(language)
+        return Pixels(fakes.FakePixelEnv(), image_size)
+
+    monkeypatch.setattr(from_mof, "make_gym_env", fake_make_gym_env)
+    env = envs.make_env("mof", "ReachMulticolor_1to2Distractors_Dense-v1", (8, 8), 50, 2, language={"memory_length": 8})
+    for _ in range(20):
+        env.reset()
+    assert languages == [{"memory_length": 8}] * 2
 
 
 def test_make_env_gym_suite_seeds_the_environment_only_when_asked():
@@ -179,7 +237,7 @@ def test_distractor_wrapper_does_not_leak_environments(monkeypatch):
 
     created = []
 
-    def fake_make_gym_env(name, image_size, max_episode_steps, action_repeat, seed):
+    def fake_make_gym_env(name, image_size, max_episode_steps, action_repeat, seed, language=None):
         created.append(fakes.FakePixelEnv())
         return Pixels(created[-1], image_size)
 

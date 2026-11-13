@@ -5,8 +5,8 @@ import enum
 import gym
 import importlib.machinery
 import numpy as np
+from sold.envs.vector import stack_observations
 import sys
-import torch
 import types
 
 
@@ -62,11 +62,13 @@ if "FakePixel-v0" not in gym.envs.registry.env_specs:
     gym.register(id="FakePixel-v0", entry_point="tests.fakes:FakePixelEnv")
 
 
-def make_fake_env(image_size=(16, 16), max_episode_steps: int = 8, action_repeat: int = 1, seed=None, **env_kwargs):
-    """The real SOLD wrapper stack (suite 'gym') around FakePixelEnv."""
+def make_fake_env(
+    image_size=(16, 16), max_episode_steps: int = 8, action_repeat: int = 1, seed=None, language=None, **env_kwargs
+):
+    """The real SOLD wrapper stack (suite 'gym') around FakePixelEnv; language needs the fake_language fixture."""
     from sold.envs import make_env
 
-    env = make_env("gym", "FakePixel-v0", tuple(image_size), max_episode_steps, action_repeat, seed)
+    env = make_env("gym", "FakePixel-v0", tuple(image_size), max_episode_steps, action_repeat, seed, language)
     for key, value in env_kwargs.items():
         setattr(env.unwrapped, key, value)
     return env
@@ -101,14 +103,65 @@ class FakeBatchEnv:
         self.closed = False
 
     def reset(self):
-        return torch.stack([env.reset() for env in self.envs])
+        return stack_observations([env.reset() for env in self.envs])
 
     def step(self, actions):
         obs, rewards, dones, infos = zip(*[env.step(action) for env, action in zip(self.envs, actions)])
-        return torch.stack(obs), list(rewards), list(dones), list(infos)
+        return stack_observations(obs), list(rewards), list(dones), list(infos)
 
     def close(self):
         self.closed = True
+
+
+# ------------------------------------------------------------------ fake multi_object_fetch.language
+# Token ids of real instructions (T5), as in multi_object_fetch/language/embeds.pkl.
+INSTRUCTIONS = {
+    "reach the red object": (1535, 8, 1131, 3735),
+    "reach the dodger blue object": (1535, 8, 26841, 52, 1692, 3735),
+}
+
+
+class FakeLanguageWrapper(gym.Wrapper):
+    """multi_object_fetch.language.LanguageWrapper's interface and schedule over FakePixelEnv: the instructions above
+    alternate between episodes; each streams one token per step from the reset on, and again every
+    repeat_task_every steps once the previous stream has ended (pads in between)."""
+
+    def __init__(self, env, repeat_task_every: int = 20, visualize: bool = True):
+        super().__init__(env)
+        self.repeat_task_every = repeat_task_every
+        self.visualize = visualize
+        self.token_cache = {"<pad>": 0, **{text: np.array(ids) for text, ids in INSTRUCTIONS.items()}}
+        token_space = gym.spaces.Box(0, 32100, (), np.uint32)
+        self.observation_space = gym.spaces.Dict({"observation": env.observation_space, "token": token_space})
+        self.instruction = ""
+        self.episodes = 0
+
+    def reset(self):
+        self.instruction = list(INSTRUCTIONS)[self.episodes % len(INSTRUCTIONS)]
+        self.episodes += 1
+        self.steps, self.stream, self.stream_start = 0, [], 0
+        return self._observation(self.env.reset())
+
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        self.steps += 1
+        return self._observation(obs), reward, done, {**info, "instruction": self.instruction}
+
+    def _observation(self, obs):
+        restart = self.repeat_task_every > 0 and self.steps - self.stream_start >= self.repeat_task_every
+        if self.steps == 0 or (not self.stream and restart):
+            self.stream, self.stream_start = list(self.token_cache[self.instruction]), self.steps
+        token = self.stream.pop(0) if self.stream else 0
+        return {"observation": obs, "token": np.uint32(token)}
+
+
+def make_fake_language_env(seed=None, language=None, **env_kwargs):
+    """make_fake_env with FakeLanguageWrapper, for VectorEnv workers: it replaces multi_object_fetch's wrapper for
+    the rest of the process (tests in the main process use the fake_language fixture instead)."""
+    from sold.envs.wrappers import language as language_module
+
+    language_module.language_wrapper_class = lambda: FakeLanguageWrapper
+    return make_seeded_fake_env(seed=seed, language=language or {"memory_length": 8}, **env_kwargs)
 
 
 # ------------------------------------------------------------------ fake dm_control / dm_env

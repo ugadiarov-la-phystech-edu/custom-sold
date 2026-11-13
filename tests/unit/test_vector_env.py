@@ -41,6 +41,37 @@ def test_vector_env_steps_each_environment_in_its_own_process():
     env.close()  # Closing again does nothing.
 
 
+def test_single_env_batches_dict_observations(fake_language):
+    single = SingleEnv(fakes.make_fake_env(language={"memory_length": 8}))
+    for obs in (single.reset(), single.step(torch.zeros(1, 2))[0]):
+        assert set(obs) == {"image", "tokens"} and obs["image"].shape == (1, 3, 16, 16)
+        assert obs["tokens"].shape == (1, 8) and obs["tokens"].dtype == torch.int64
+    assert obs["tokens"][0, :2].tolist() == [1535, 8]
+
+
+def test_vector_env_batches_dict_observations():
+    env = VectorEnv(functools.partial(fakes.make_fake_language_env, max_episode_steps=4), num_envs=2, seed=3)
+    try:
+        obs = env.reset()
+        assert obs["image"].shape == (2, 3, 16, 16) and obs["image"].dtype == torch.uint8
+        assert obs["image"][:, 1].amax(dim=(1, 2)).tolist() == [3, 1003 % 256]  # Each worker's own environment.
+        assert obs["tokens"].shape == (2, 8) and obs["tokens"][:, 0].tolist() == [1535, 1535]
+        obs = env.step(torch.zeros(2, 2))[0]
+        assert obs["tokens"][:, :2].tolist() == [[1535, 8], [1535, 8]]
+    finally:
+        env.close()
+
+
+def test_stack_observations_of_tensors_arrays_and_dicts():
+    from sold.envs.vector import stack_observations
+
+    arrays = [np.full(3, index) for index in range(2)]
+    assert torch.equal(stack_observations(arrays), torch.tensor([[0, 0, 0], [1, 1, 1]]))
+    assert torch.equal(stack_observations([torch.ones(2)]), torch.ones(1, 2))
+    batch = stack_observations([{"a": array, "b": array[:1]} for array in arrays])
+    assert set(batch) == {"a", "b"} and batch["a"].shape == (2, 3) and batch["b"].tolist() == [[0], [1]]
+
+
 def test_vector_env_raises_the_errors_of_its_workers():
     with pytest.raises(RuntimeError, match="(?s)Environment worker 0 failed.*broken environment"):
         VectorEnv(fakes.make_broken_env, num_envs=1)
@@ -82,6 +113,18 @@ def test_env_worker_serves_requests(monkeypatch):
     replies = [connection.recv() for _ in range(4)]
     assert seeds == [7] and [status for status, _ in replies] == ["ok"] * 4
     assert replies[0][1][1] == 8 and replies[1][1].shape == (3, 16, 16) and replies[2][1][2] is False
+
+    from sold.envs.wrappers import language
+
+    # The language factory replaces the wrapper class for the process; restored at the end of the test.
+    monkeypatch.setattr(language, "language_wrapper_class", language.language_wrapper_class)
+    connection, child = multiprocessing.Pipe()
+    for request in [("reset", None), ("step", np.zeros(2, np.float32)), ("close", None)]:
+        connection.send(request)
+    env_worker(child, fakes.make_fake_language_env, 7)
+    replies = [connection.recv() for _ in range(4)]
+    assert set(replies[1][1]) == {"image", "tokens"} and replies[2][1][0]["tokens"][:2].tolist() == [1535, 8]
+    assert all(isinstance(value, np.ndarray) for value in replies[2][1][0].values())
 
     connection, child = multiprocessing.Pipe()
     connection.send(("render", None))

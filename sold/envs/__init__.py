@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 import gym
 import os
 from sold.envs.from_gym import make_env as make_gym_env
@@ -12,14 +13,19 @@ def make_env(
     max_episode_steps: int,
     action_repeat: int,
     seed: int | None = None,
+    language: Mapping | None = None,
 ) -> gym.Env:
+    """language (multi_object_fetch tasks, suites gym and mof): stream the task's instruction into a memory (see
+    wrappers.language); the observations are then {"image", "tokens"}. None or empty: no instruction."""
     os.environ["MUJOCO_GL"] = "egl"  # MuJoCo rendering backend; set before importing a MuJoCo suite.
+    if language and suite not in ("gym", "mof"):
+        raise ValueError(f"Streamed instructions need the 'gym' or 'mof' suite, not {suite!r}.")
     if suite == "gym":
-        env = make_gym_env(name, image_size, max_episode_steps, action_repeat, seed)
+        env = make_gym_env(name, image_size, max_episode_steps, action_repeat, seed, language=language)
     elif suite == "mof":
         from sold.envs.from_mof import make_env as make_mof_env
 
-        env = make_mof_env(name, image_size, max_episode_steps, action_repeat, seed)
+        env = make_mof_env(name, image_size, max_episode_steps, action_repeat, seed, language=language)
     elif suite == "dmcontrol":
         from sold.envs.from_dmcontrol import make_env as make_dmcontrol_env
 

@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 import gym
 import numpy as np
 import random
@@ -33,7 +33,12 @@ class VariableDistractorsWrapper(gym.Wrapper):
 
 
 def make_env(
-    name: str, image_size: tuple[int, int], max_episode_steps: int, action_repeat: int, seed: int | None = None
+    name: str,
+    image_size: tuple[int, int],
+    max_episode_steps: int,
+    action_repeat: int,
+    seed: int | None = None,
+    language: Mapping | None = None,
 ):
     # Register MOF environments and parse the number of distractors.
     import multi_object_fetch  # noqa: F401  (registers the environments with gym)
@@ -47,6 +52,6 @@ def make_env(
 
     def make_variant(variant: str) -> gym.Env:
         variant_seed = None if seed is None else seed + env_names[variant]  # Different seed per variant.
-        return make_gym_env(variant, image_size, max_episode_steps, action_repeat, variant_seed)
+        return make_gym_env(variant, image_size, max_episode_steps, action_repeat, variant_seed, language=language)
 
     return VariableDistractorsWrapper(list(env_names), make_variant)

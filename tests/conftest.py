@@ -64,6 +64,15 @@ def aot_eager(monkeypatch):
     monkeypatch.setattr(torch, "compile", lambda fn, mode=None, **kwargs: compile(fn, backend="aot_eager", **kwargs))
 
 
+# ---------------------------------------------------------------------------------- language
+@pytest.fixture
+def fake_language(monkeypatch):
+    """Stream instructions with tests.fakes.FakeLanguageWrapper instead of multi_object_fetch's LanguageWrapper."""
+    from sold.envs.wrappers import language
+
+    monkeypatch.setattr(language, "language_wrapper_class", lambda: fakes.FakeLanguageWrapper)
+
+
 # ------------------------------------------------------------------------------- tiny models
 def make_tiny_savi(image_size=(16, 16), num_slots=2, slot_dim=8, action_dim=2, action_conditional=False):
     """A SAVi with the same structure as configs/autoencoder/savi.yaml, at toy size."""
