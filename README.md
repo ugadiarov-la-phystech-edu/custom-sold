@@ -105,6 +105,19 @@ The number of updates per environment step stays the same, so runs remain compar
 end together (multi_object_fetch episodes always last `max_episode_steps`). Evaluation runs at the first episode end after
 each `eval_freq` env steps, which with N environments can be up to `N * max_episode_steps` later.
 
+### Text instructions
+
+In multi_object_fetch's Multicolor tasks the target's color is named only in the episode's instruction, which the
+environment streams one token per step (`multi_object_fetch.language`; install the `dev-render-fix` branch of
+multi-object-fetch-with-text). An environment config's `language` adds the instruction heard so far to the observations
+(`sold/envs/wrappers/language.py`), and `model.language` lets the reward predictor, actor and critic read it, while SAVi
+and the dynamics model stay visual:
+```bash
+python train_sold.py preset=reach_multicolor                                         # streamed instruction
+python train_sold.py preset=reach_multicolor model.env.language.reveal=full          # oracle: the whole instruction from step 0
+python train_sold.py preset=reach_multicolor model.env.language=null model.language=null  # vision only
+```
+
 
 <details>
     <summary><i>Show sample training outputs</i></summary>

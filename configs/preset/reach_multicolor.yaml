@@ -1,0 +1,23 @@
+# @package _global_
+# SOLD on ReachMulticolor: the reward predictor, actor and critic read the instruction memory; the ReachRed SAVi
+# (7 slots) stays frozen. Oracle: model.env.language.reveal=full. Vision-only baseline: model.env.language=null
+# model.language=null.
+defaults:
+  - override /environment@model.env: reach_multicolor
+
+experiment: reach_multicolor_4layers_savi7
+
+model:
+  max_steps: 20_000_000
+  eval_freq: 10_000
+  num_eval_episodes: 30
+  language:  # The heads' LanguageEncoder.
+    embed_dim: 32
+  autoencoder:
+    checkpoint_path: ../checkpoints/autoencoder/savi/reach_red/latest.ckpt
+  actor:
+    num_layers: 4
+  critic:
+    num_layers: 4
+  reward_predictor:
+    num_layers: 4

@@ -238,6 +238,27 @@ def test_presets_equal_the_overrides_of_the_training_scripts(preset, overrides):
         )
 
 
+def test_reach_multicolor_preset_streams_the_instruction_to_the_heads():
+    preset = ["preset=reach_multicolor"]
+    with initialize_config_dir(config_dir=str(CONFIGS_DIR), version_base=None):
+        cfg = compose("train_sold", overrides=preset)
+        oracle = compose("train_sold", overrides=preset + ["model.env.language.reveal=full"])
+        baseline = compose("train_sold", overrides=preset + ["model.env.language=null", "model.language=null"])
+    assert cfg.model.env.name == "ReachMulticolor_0to4Distractors_Dense-v1" and cfg.model.env.max_episode_steps == 50
+    assert cfg.model.env.language == {"memory_length": 8, "repeat_task_every": 20, "reveal": "stream"}
+    assert cfg.model.language == {"embed_dim": 32} and cfg.model.actor.num_layers == 4
+    assert cfg.model.autoencoder.checkpoint_path.endswith("savi/reach_red/latest.ckpt")  # 7 slots, frozen.
+    assert not cfg.model.finetune_autoencoder
+    assert oracle.model.env.language.reveal == "full"
+    assert baseline.model.env.language is None and baseline.model.language is None
+
+
+def test_train_sold_reads_no_instructions_by_default():
+    with initialize_config_dir(config_dir=str(CONFIGS_DIR), version_base=None):
+        cfg = compose("train_sold")
+    assert cfg.model.language is None and "language" not in cfg.model.env
+
+
 def test_train_sold_compiles_with_cuda_graphs_by_default():
     with initialize_config_dir(config_dir=str(CONFIGS_DIR), version_base=None):
         cfg = compose("train_sold")
@@ -255,7 +276,7 @@ def test_train_sold_trains_in_float32_by_default():
 
 
 # ---------------------------------------------------------------------------------- all scripts
-@pytest.mark.parametrize("environment", ["reach_red", "push_red", "pick_red"])
+@pytest.mark.parametrize("environment", ["reach_red", "push_red", "pick_red", "reach_multicolor"])
 def test_training_and_evaluation_share_the_environment_configs(environment):
     with initialize_config_dir(config_dir=str(CONFIGS_DIR), version_base=None):
         train = compose("train_sold", overrides=[f"environment@model.env={environment}"]).model.env

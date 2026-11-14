@@ -1,0 +1,13 @@
+# multi_object_fetch ReachMulticolor with 0 to 4 distractors: the target's color (one of 16) is named only in the
+# instruction, streamed one token per agent step and remembered as the observations' "tokens"
+# (sold.envs.wrappers.language). Needs multi_object_fetch with its language package (multi-object-fetch-with-text,
+# branch dev-render-fix).
+defaults:
+  - reach_red
+  - _self_
+
+name: ReachMulticolor_0to4Distractors_Dense-v1  # Episodes of 100 simulator steps: 50 agent steps.
+language:
+  memory_length: 8  # Token ids remembered; the longest Reach, Push and Pick instruction has 8.
+  repeat_task_every: 20  # Agent steps from the start of one stream of the instruction to the next.
+  reveal: stream  # "full": the whole instruction from the first step on (an oracle).

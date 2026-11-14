@@ -62,11 +62,15 @@ def sold_overrides(run_dir, savi_checkpoint, **values):
 @pytest.fixture(scope="module")
 def savi_checkpoint(tmp_path_factory):
     """A toy SAVi checkpoint for 16x16 images and 2-D actions, saved like train_autoencoder does."""
+    return save_savi_checkpoint(tmp_path_factory.mktemp("savi") / "latest.ckpt")
+
+
+def save_savi_checkpoint(path, action_dim=2):
     import functools
     from lightning import Trainer
 
-    path = tmp_path_factory.mktemp("savi") / "latest.ckpt"
-    module = train_autoencoder.AutoencoderModule(make_tiny_savi(), functools.partial(torch.optim.Adam, lr=1e-3))
+    savi = make_tiny_savi(action_dim=action_dim)
+    module = train_autoencoder.AutoencoderModule(savi, functools.partial(torch.optim.Adam, lr=1e-3))
     trainer = Trainer(
         accelerator="cpu", logger=False, enable_checkpointing=False, enable_progress_bar=False, max_steps=0
     )
@@ -260,6 +264,48 @@ def test_evaluate_sold(monkeypatch, tmp_path, sold_run):
     assert {"timing/eval/action_selection_ms", "timing/eval/env_step_ms"} <= record.keys()
     videos = sorted(os.listdir(out / "videos" / checkpoint.stem))
     assert videos == ["episode_high_res_0.mp4", "episode_high_res_1.mp4", "episode_obs_0.mp4", "episode_obs_1.mp4"]
+
+
+# ----------------------------------------------------------------------------------- instructions
+INSTRUCTIONS = ["+model.env.language={memory_length:8}", "model.language={embed_dim:4}"]
+
+
+@pytest.mark.usefixtures("fake_language")
+def test_train_and_evaluate_sold_with_instructions(monkeypatch, tmp_path, savi_checkpoint):
+    from sold.data.ring_buffer import RingBufferDataset
+
+    run_entry_point(monkeypatch, train_sold.train, sold_overrides(tmp_path, savi_checkpoint) + INSTRUCTIONS)
+    checkpoint = next(tmp_path.glob("logs/version_0/checkpoints/*.ckpt"))
+    assert torch.load(checkpoint, weights_only=False)["hyper_parameters"]["language"] == {"embed_dim": 4}
+    fields = RingBufferDataset.load_bookkeeping(tmp_path / "logs/version_0/replay_buffer")["info"].fields
+    assert set(fields) == {"obs", "tokens", "action", "reward"}
+    out = tmp_path / "eval"
+    monkeypatch.chdir(tmp_path)
+    evaluation = [f"hydra.run.dir={out}", f"checkpoint_path='{checkpoint}'", "eval_episodes=2"]
+    evaluation += ["env.max_episode_steps=8", *FAKE_ENV, "+env.language={memory_length:8}"]
+    run_entry_point(monkeypatch, evaluate_sold.evaluate, evaluation)
+    assert len(json.loads(open(out / "metrics.jsonl").read())["episode_returns"]) == 2
+    assert len(os.listdir(out / "videos" / checkpoint.stem)) == 4
+
+
+@pytest.mark.mujoco
+@pytest.mark.parametrize("reveal", ["stream", "full"])
+def test_train_sold_on_reach_multicolor(monkeypatch, tmp_path, reveal):
+    pytest.importorskip("multi_object_fetch.language")
+    savi = save_savi_checkpoint(tmp_path / "savi.ckpt", action_dim=4)  # Fetch actions: x, y, z, gripper.
+    fake_env = tuple(item.split("=")[0].replace("env.", "model.env.", 1) for item in FAKE_ENV)
+    overrides = [item for item in sold_overrides(tmp_path, savi) if not item.startswith(fake_env)]
+    overrides += [
+        "environment@model.env=reach_multicolor",
+        "model.env.image_size=[16,16]",
+        f"model.env.language.reveal={reveal}",
+        "model.language={embed_dim:4}",
+    ]
+    run_entry_point(monkeypatch, train_sold.train, overrides)
+    records = read_metrics(tmp_path / "logs/version_0")
+    assert any("eval/episode_return" in record for record in records)
+    losses = [record["train/reward_loss"] for record in records if "train/reward_loss" in record]
+    assert losses and all(math.isfinite(loss) for loss in losses)
 
 
 def test_evaluate_sold_directory_without_success_info(monkeypatch, tmp_path, sold_run):

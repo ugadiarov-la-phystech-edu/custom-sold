@@ -51,6 +51,9 @@ model:
   actor_entropy_loss_weight: 0.0003
   actor_gradients: "dynamics"  # Use "dynamics" or "reinforce" gradients for the actor.
   finetune_autoencoder: False  # Whether to finetune the autoencoder model.
+  # For environments that stream an instruction (their config's language): the arguments of the LanguageEncoder with
+  # which the reward predictor, actor and critic read the instruction memory, e.g. {embed_dim: 32}; null: none.
+  language: null
 
   num_context: 3  # exact or [min, max] number of context frames given to the model during dynamics learning and latent imagination.
   imagination_horizon: 15  # Number of frames to predict in imagination.
