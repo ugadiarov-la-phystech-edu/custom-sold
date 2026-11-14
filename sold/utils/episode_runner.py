@@ -11,27 +11,26 @@ class EpisodeRunner:
     The policy is called as policy(obs, is_first=..., mode=...) with the observations of all environments and returns
     their actions. The environments' episodes run in lockstep: they all end at the same step. timings records
     env_reset, action_selection (with the actions' copy to the CPU) and env_step under the phase "collect" or "eval".
+    Observations are images, or {"image", "tokens"} with an instruction memory; played episodes record the images.
     """
 
     def __init__(self, env: Any, policy: Callable[..., torch.Tensor], timings: Timings | None = None) -> None:
         self.env = env
         self.policy = policy
         self.timings = timings or Timings(enabled=False)
-        self.obs: torch.Tensor | None = None
+        self.obs: Any = None
         self.action: torch.Tensor | None = None  # The last actions taken, (num_envs, action_dim) on the CPU.
         self.done = True  # No episode in progress.
         self.is_first = True  # The next step is the first of its episode.
 
-    def reset(self, phase: str = "collect") -> torch.Tensor:
+    def reset(self, phase: str = "collect") -> Any:
         """Start new episodes and return their first observations, (num_envs, ...)."""
         with self.timings.measure(f"{phase}/env_reset"):
             self.obs = self.env.reset()
         self.done, self.is_first = False, True
         return self.obs
 
-    def step(
-        self, mode: str, phase: str = "collect"
-    ) -> tuple[torch.Tensor, list[float], list[bool], list[dict[str, Any]]]:
+    def step(self, mode: str, phase: str = "collect") -> tuple[Any, list[float], list[bool], list[dict[str, Any]]]:
         """Take actions chosen in mode ("train", "eval" or "random"); return the obs, rewards, dones and infos."""
         with self.timings.measure(f"{phase}/action_selection"):
             self.action = self.policy(self.obs, is_first=self.is_first, mode=mode).cpu()
@@ -73,9 +72,10 @@ class EpisodeRunner:
         return episodes[:num_episodes]
 
     def _record(
-        self, batch: list[defaultdict[str, list[Any]]], obs: torch.Tensor, render: Callable[[Any], torch.Tensor] | None
+        self, batch: list[defaultdict[str, list[Any]]], obs: Any, render: Callable[[Any], torch.Tensor] | None
     ) -> None:
-        for episode, env_obs in zip(batch, obs.cpu()):
+        images = obs["image"] if isinstance(obs, dict) else obs
+        for episode, env_obs in zip(batch, images.cpu()):
             episode["obs"].append(env_obs)
         if render is not None:
             batch[0]["rendered"].append(render(self.env))

@@ -152,6 +152,16 @@ def make_tiny_sold(env=None, **overrides):
     return SOLDModule(**tiny_sold_kwargs(env, **overrides))
 
 
+LANGUAGE_ENV = {"memory_length": 8}  # The environments' instruction memory.
+LANGUAGE_MODEL = {"embed_dim": 4}  # The heads' language encoders.
+
+
+def make_tiny_language_sold(env=None, **overrides):
+    """A tiny SOLD whose heads read instruction memories (its default environment needs the fake_language fixture)."""
+    env = env if env is not None else fakes.make_fake_env(language=LANGUAGE_ENV)
+    return make_tiny_sold(env, language=LANGUAGE_MODEL, **overrides)
+
+
 @pytest.fixture
 def fake_env():
     return fakes.make_fake_env()

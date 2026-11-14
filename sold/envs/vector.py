@@ -53,6 +53,11 @@ def to_numpy(obs: Any) -> Any:
     return {key: value.numpy() for key, value in obs.items()} if isinstance(obs, dict) else obs.numpy()
 
 
+def to_device(obs: Any, device: torch.device) -> Any:
+    """An observation (a tensor or a dict of them) on device."""
+    return {key: value.to(device) for key, value in obs.items()} if isinstance(obs, dict) else obs.to(device)
+
+
 def env_worker(connection: Connection, env_factory: Callable[..., gym.Env], seed: int) -> None:
     """Build env_factory(seed=seed) and serve "reset", "step" and "close" requests until "close" or an error.
 

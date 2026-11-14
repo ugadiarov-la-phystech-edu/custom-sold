@@ -10,8 +10,9 @@ import torch
 pytestmark = pytest.mark.usefixtures("eager_randomness")
 
 
-def _steps(sold, num_steps, device="cpu"):
-    """The losses of num_steps training steps on a fixed batch, and the gradients after the first step.
+def _steps(sold, num_steps, device="cpu", tokens=None):
+    """The losses of num_steps training steps on a fixed batch (with tokens: and these instruction memories), and the
+    gradients after the first step.
 
     Later parameters are compared through the losses: Adam turns rounding noise in gradients that are zero in theory
     (e.g. of attention key biases) into steps of about the learning rate.
@@ -24,7 +25,8 @@ def _steps(sold, num_steps, device="cpu"):
         torch.manual_seed(step)
         if sold.cudagraphs:
             torch.compiler.cudagraph_mark_step_begin()
-        outputs = sold.training_step({"obs": images * 255, "action": actions, "reward": rewards})
+        batch = {"obs": images * 255, "action": actions, "reward": rewards}
+        outputs = sold.training_step(batch if tokens is None else batch | {"tokens": tokens.to(device)})
         losses.append({key: value.detach().clone() for key, value in outputs.items() if key.endswith("_loss")})
         if step == 0:
             gradients = {name: p.grad.clone() for name, p in sold.named_parameters() if p.grad is not None}

@@ -66,6 +66,7 @@ class Imagination:
     imagined_slots: torch.Tensor  # Context and imagined slots (detached), (batch_size, num_context + horizon, ...)
     num_context: int
     predicted_rewards: torch.Tensor  # (batch_size, horizon)
+    tokens: torch.Tensor | None = None  # The instruction memories of imagined_slots' steps, with language.
 
 
 class SOLDModule(OnlineModule):
@@ -106,8 +107,12 @@ class SOLDModule(OnlineModule):
         profile: bool = True,
         keep_last_checkpoint_only: bool = False,
         optimization: Mapping[str, Mapping[str, float]] | None = None,  # Or flat legacy_hparams (old checkpoints).
+        language: Mapping[str, Any] | None = None,
         **legacy_hparams: Any,
     ) -> None:
+        """language: the arguments of the LanguageEncoder (modeling.sold.language) with which the reward predictor,
+        actor and critic read each step's instruction memory ("tokens" of the observations and the replay buffer);
+        None: no instructions."""
         optimization = optimization_settings(optimization, legacy_hparams)
         # Every constructor argument but env, as Lightning's save_hyperparameters stored them in checkpoints.
         hparams = {
@@ -145,6 +150,9 @@ class SOLDModule(OnlineModule):
             "num_slots": autoencoder.num_slots,
             "slot_dim": autoencoder.slot_dim,
         }
+        if language is not None:  # The heads read the instruction; SAVi and the dynamics stay visual.
+            regression_infos["language"] = language
+        self.language = language
         self.autoencoder = autoencoder
         if not finetune_autoencoder:  # Its weights are never updated, so they collect no gradients.
             self.autoencoder.requires_grad_(False)
@@ -199,6 +207,8 @@ class SOLDModule(OnlineModule):
             self.optimizers
         )
         images, actions, rewards = batch["obs"] / 255.0, batch["action"], batch["reward"]
+        tokens = batch.get("tokens")
+        self._check_language(tokens, "The replay buffer")
 
         # Without fine-tuning, the autoencoder forward pass needs no autograd graph.
         with self.measure_gpu("learn/autoencoder"), torch.set_grad_enabled(self.finetune_autoencoder):
@@ -217,7 +227,7 @@ class SOLDModule(OnlineModule):
 
         # Learn to predict rewards from the slot representation.
         with self.measure_gpu("learn/reward_loss"):
-            outputs |= self.compute_reward_loss(images, outputs["reconstructions"], slots, rewards)
+            outputs |= self.compute_reward_loss(images, outputs["reconstructions"], slots, rewards, tokens)
         self._optimize("reward", reward_optimizer, outputs["reward_loss"])
 
         # Update the target critic network.
@@ -226,7 +236,7 @@ class SOLDModule(OnlineModule):
 
         # Perform latent imagination to train the actor and critic.
         with self.measure_gpu("learn/imagination"):
-            imagination = self.imagine_ahead(slots, actions)
+            imagination = self.imagine_ahead(slots, actions, tokens)
 
         # Learn the actor.
         with self.measure_gpu("learn/actor_loss"):
@@ -245,22 +255,44 @@ class SOLDModule(OnlineModule):
                 imagination.num_context,
                 imagination.lambda_returns,
                 imagination.predicted_values_targ,
+                imagination.tokens,
             )
         self._optimize("critic", critic_optimizer, outputs["critic_loss"])
 
         if visualize:
             with self.measure_gpu("learn/visualization"):
-                self.log_visualizations(rewards, reconstruction, outputs, imagination)
+                self.log_visualizations(rewards, reconstruction, outputs, imagination, tokens)
         return outputs
+
+    @staticmethod
+    def _language_args(tokens: torch.Tensor | None) -> tuple[torch.Tensor, ...]:
+        """The stages' extra tokens argument, passed only with language: without it they run as before."""
+        return () if tokens is None else (tokens,)
+
+    def check_replay_buffer_fields(self, fields: Mapping[str, Any]) -> None:
+        self._check_language(fields.get("tokens"), "The saved replay buffer")
+
+    def _check_language(self, tokens: Any, source: str) -> None:
+        """Instruction memories (tokens) must come with language and only with it."""
+        if tokens is not None and self.language is None:
+            raise ValueError(f"{source} has instruction memories (tokens), but the model was built without language.")
+        if tokens is None and self.language is not None:
+            raise ValueError(f"{source} has no instruction memories (tokens), but the model was built with language.")
 
     @torch.no_grad()
     def log_visualizations(
-        self, rewards: torch.Tensor, reconstruction: dict[str, Any], outputs: dict[str, Any], imagination: Imagination
+        self,
+        rewards: torch.Tensor,
+        reconstruction: dict[str, Any],
+        outputs: dict[str, Any],
+        imagination: Imagination,
+        tokens: torch.Tensor | None = None,
     ) -> None:
         """Log figures of the first sample of a training batch (after each evaluation).
 
-        reconstruction: the autoencoder's outputs; outputs: those of compute_dynamics_loss and compute_reward_loss.
-        Attention maps show the reward predictor and actor after this step's update.
+        reconstruction: the autoencoder's outputs; outputs: those of compute_dynamics_loss and compute_reward_loss;
+        tokens: the batch's instruction memories, with language. Attention maps show the reward predictor and actor
+        after this step's update.
         """
         self.log_image(
             "autoencoder_reconstruction",
@@ -270,13 +302,14 @@ class SOLDModule(OnlineModule):
             "dynamics_prediction",
             dynamics_figure(self.autoencoder, reconstruction, outputs["num_context"], outputs["predicted_outputs"]),
         )
-        figures = reward_figures(self.reward_predictor, reconstruction, rewards, outputs["predicted_rewards"])
+        figures = reward_figures(self.reward_predictor, reconstruction, rewards, outputs["predicted_rewards"], tokens)
         figures |= imagination_figures(
             self.autoencoder,
             self.actor,
             imagination.imagined_slots,
             imagination.num_context,
             imagination.predicted_rewards,
+            imagination.tokens,
         )
         for name, image in figures.items():
             self.log_image(name, image)
@@ -341,13 +374,20 @@ class SOLDModule(OnlineModule):
         }
 
     def compute_reward_loss(
-        self, images: torch.Tensor, reconstructions: torch.Tensor, slots: torch.Tensor, rewards: torch.Tensor
+        self,
+        images: torch.Tensor,
+        reconstructions: torch.Tensor,
+        slots: torch.Tensor,
+        rewards: torch.Tensor,
+        tokens: torch.Tensor | None = None,
     ) -> dict[str, Any]:
-        return self._reward_loss_stage(slots, rewards)
+        return self._reward_loss_stage(slots, rewards, *self._language_args(tokens))
 
-    def _reward_loss_stage(self, slots: torch.Tensor, rewards: torch.Tensor) -> dict[str, Any]:
+    def _reward_loss_stage(
+        self, slots: torch.Tensor, rewards: torch.Tensor, tokens: torch.Tensor | None = None
+    ) -> dict[str, Any]:
         is_firsts = torch.isnan(rewards)  # We add NaN as a reward on the first time-step.
-        predicted_rewards_dist = self.reward_predictor(slots.detach())
+        predicted_rewards_dist = self.reward_predictor(slots.detach(), tokens=tokens)
         log_probs = predicted_rewards_dist.log_prob(torch.nan_to_num(rewards).unsqueeze(2))
         # Masked means: boolean indexing syncs with the GPU.
         valid = (~is_firsts).to(log_probs.dtype)
@@ -362,15 +402,34 @@ class SOLDModule(OnlineModule):
             "reward_mse_loss": (squared_errors * valid).sum() / num_valid,
         }
 
-    def imagine_ahead(self, slots: torch.Tensor, actions: torch.Tensor) -> Imagination:
+    def imagine_ahead(
+        self, slots: torch.Tensor, actions: torch.Tensor, tokens: torch.Tensor | None = None
+    ) -> Imagination:
         self.dynamics_predictor.eval()
         num_context = self.max_num_context if self.start_imagination_from_every else self.sample_num_context()
         # Only the actor (and through the imagined slots the dynamics model) gets gradients.
         with FreezeParameters([self.reward_predictor, self.critic]):
-            outputs = self._imagination_stage(slots, actions, num_context)
+            outputs = self._imagination_stage(slots, actions, num_context, *self._language_args(tokens))
         return Imagination(**outputs, num_context=num_context)
 
-    def _imagination_stage(self, slots: torch.Tensor, actions: torch.Tensor, num_context: int) -> dict[str, Any]:
+    def imagination_tokens(self, tokens: torch.Tensor, num_context: int) -> torch.Tensor:
+        """The instruction memories of the steps imagination starts from and imagines, (rollouts, num_context +
+        horizon, memory_length): those stored for the window's steps, since the stream does not depend on the actions.
+        With start_imagination_from_every, one rollout per start (as the slots), holding the window's last memory
+        beyond its end."""
+        length = num_context + self.imagination_horizon
+        if not self.start_imagination_from_every:
+            return tokens[:, :length]
+        sequence_length = tokens.shape[1]
+        starts = torch.arange(sequence_length - num_context + 1, device=tokens.device)
+        steps = (starts[:, None] + torch.arange(length, device=tokens.device)).clamp(max=sequence_length - 1)
+        return tokens[:, steps].flatten(end_dim=1)
+
+    def _imagination_stage(
+        self, slots: torch.Tensor, actions: torch.Tensor, num_context: int, tokens: torch.Tensor | None = None
+    ) -> dict[str, Any]:
+        if tokens is not None:
+            tokens = self.imagination_tokens(tokens, num_context)
         action_log_probs, action_entropies = [], []
         if self.start_imagination_from_every:
             slots_context = (
@@ -386,7 +445,12 @@ class SOLDModule(OnlineModule):
             actions_context = actions[:, 1:num_context].detach()
 
         for _ in range(self.imagination_horizon):
-            action_dist = self.actor(slots_context.detach(), start=slots_context.shape[1] - 1)
+            context_length = slots_context.shape[1]
+            action_dist = self.actor(
+                slots_context.detach(),
+                start=context_length - 1,
+                tokens=None if tokens is None else tokens[:, :context_length],
+            )
             selected_action = action_dist.rsample().squeeze(1)
             actions_context = torch.cat([actions_context, selected_action.unsqueeze(1)], dim=1)
             action_log_probs.append(action_dist.log_prob(selected_action.unsqueeze(1)))
@@ -397,17 +461,20 @@ class SOLDModule(OnlineModule):
             )
             slots_context = torch.cat([slots_context, predicted_slots], dim=1)
 
-        predicted_rewards = self.reward_predictor(slots_context, start=num_context).mean.squeeze(-1)
-        predicted_values = self.critic(slots_context, start=num_context).mean.squeeze(-1)
+        predicted_rewards = self.reward_predictor(slots_context, start=num_context, tokens=tokens).mean.squeeze(-1)
+        predicted_values = self.critic(slots_context, start=num_context, tokens=tokens).mean.squeeze(-1)
         slots_context = slots_context.detach()
-        return {
+        tokens_targ = None if tokens is None else tokens[:, :-1]
+        values_targ = self.critic_target(slots_context[:, :-1], start=num_context - 1, tokens=tokens_targ)
+        outputs = {
             "lambda_returns": self.compute_lambda_returns(predicted_rewards, predicted_values),
-            "predicted_values_targ": self.critic_target(slots_context[:, :-1], start=num_context - 1).mean.squeeze(-1),
+            "predicted_values_targ": values_targ.mean.squeeze(-1),
             "action_log_probs": torch.stack(action_log_probs, dim=1).squeeze(2),
             "action_entropies": torch.stack(action_entropies, dim=1),
             "imagined_slots": slots_context,
             "predicted_rewards": predicted_rewards.detach(),
         }
+        return outputs if tokens is None else outputs | {"tokens": tokens}
 
     def compute_actor_loss(
         self,
@@ -444,8 +511,11 @@ class SOLDModule(OnlineModule):
         num_context: int,
         lambda_returns: torch.Tensor,
         predicted_values_targ: torch.Tensor,
+        tokens: torch.Tensor | None = None,
     ) -> dict[str, Any]:
-        return self._critic_loss_stage(imagined_slots, num_context, lambda_returns, predicted_values_targ)
+        return self._critic_loss_stage(
+            imagined_slots, num_context, lambda_returns, predicted_values_targ, *self._language_args(tokens)
+        )
 
     def _critic_loss_stage(
         self,
@@ -453,9 +523,11 @@ class SOLDModule(OnlineModule):
         num_context: int,
         lambda_returns: torch.Tensor,
         predicted_values_targ: torch.Tensor,
+        tokens: torch.Tensor | None = None,
     ) -> dict[str, Any]:
+        tokens = None if tokens is None else tokens[:, :-1]
         return rl.losses.critic_loss(
-            self.critic(imagined_slots[:, :-1], start=num_context - 1),
+            self.critic(imagined_slots[:, :-1], start=num_context - 1, tokens=tokens),
             lambda_returns,
             predicted_values_targ,
             self.discounts,
@@ -465,22 +537,34 @@ class SOLDModule(OnlineModule):
     def compute_lambda_returns(self, rewards: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
         return rl.returns.lambda_returns(rewards, values, self.discount_factor, self.return_lambda)
 
-    def select_action(self, observation: torch.Tensor, is_first: bool = False, mode: str = "train") -> torch.Tensor:
+    def select_action(self, observation: Any, is_first: bool = False, mode: str = "train") -> torch.Tensor:
+        """observation: images (num_envs, 3, height, width), or {"image": images, "tokens": instruction memories}
+        with language."""
         if mode not in ("train", "eval", "random"):
             raise ValueError(f"Invalid mode: {mode}")
+        tokens = None
+        if isinstance(observation, dict):
+            observation, tokens = observation["image"], observation["tokens"]
+        self._check_language(tokens, "The observation")
         observation = observation / 255.0  # (num_envs, 3, height, width)
         num_envs = observation.shape[0]
 
         # Encode the images into slots and add them to the episode's slot history, a buffer of max_episode_steps steps
-        # (static shapes, so that the compiled stages replay one CUDA graph at every step).
+        # (static shapes, so that the compiled stages replay one CUDA graph at every step); likewise the instruction
+        # memories.
         if is_first:
             self._slot_history = observation.new_zeros(
                 num_envs, self.max_episode_steps, self.autoencoder.num_slots, self.autoencoder.slot_dim
+            )
+            self._token_history = (
+                None if tokens is None else tokens.new_zeros(num_envs, self.max_episode_steps, tokens.shape[1])
             )
             self._step = 0
         last_slots = None if is_first else self._slot_history[:, self._step - 1]
         slots = self._encode_stage(observation.unsqueeze(1), self.last_action.unsqueeze(1), last_slots)
         self._slot_history[:, self._step] = slots[:, 0]
+        if self._token_history is not None:
+            self._token_history[:, self._step] = tokens
         index = torch.tensor([self._step], device=observation.device)
         self._step += 1
 
@@ -489,7 +573,7 @@ class SOLDModule(OnlineModule):
                 [torch.from_numpy(self.env.action_space.sample().astype(np.float32)) for _ in range(num_envs)]
             ).to(self.actor.lower_bound.device)
             return torch.clamp(selected_action, self.actor.lower_bound, self.actor.upper_bound)
-        return self._act_stage(self._slot_history, index, mode).clone()
+        return self._act_stage(self._slot_history, index, mode, *self._language_args(self._token_history)).clone()
 
     def _encode_stage(
         self, images: torch.Tensor, actions: torch.Tensor, prior_slots: torch.Tensor | None
@@ -497,9 +581,12 @@ class SOLDModule(OnlineModule):
         """One SAVi step: the slots (num_envs, 1, num_slots, slot_dim) of images (num_envs, 1, 3, height, width)."""
         return self.autoencoder.encode(images, actions, prior_slots=prior_slots)
 
-    def _act_stage(self, slot_history: torch.Tensor, index: torch.Tensor, mode: str) -> torch.Tensor:
-        """The actions (num_envs, action_dim) at time step index of the slot history: sampled ("train") or the mode."""
-        action_dist = self.actor(slot_history, index=index)
+    def _act_stage(
+        self, slot_history: torch.Tensor, index: torch.Tensor, mode: str, token_history: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        """The actions (num_envs, action_dim) at time step index of the slot history (and the instruction memories'
+        history, with language): sampled ("train") or the mode."""
+        action_dist = self.actor(slot_history, index=index, tokens=token_history)
         selected_action = action_dist.sample() if mode == "train" else action_dist.mode
         selected_action = selected_action.reshape(slot_history.shape[0], -1)
         # Clamp every dimension to its own bounds (the actor keeps them as buffers on the module's device).

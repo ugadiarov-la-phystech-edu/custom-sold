@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import gym
 import hydra
 import logging
@@ -11,7 +11,7 @@ from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, T
 import shutil
 from sold.data.ring_buffer import BOOKKEEPING_FILE, RingBufferDataset
 from sold.data.utils import sample_batches
-from sold.envs.vector import SingleEnv
+from sold.envs.vector import SingleEnv, to_device
 from sold.utils.episode_runner import EpisodeRunner
 from sold.utils.logging import MetricsWriter
 from sold.utils.profiling import Timings
@@ -49,7 +49,7 @@ def _autocast(method, device_type: str):
     def to_float32(output):
         if isinstance(output, dict):
             return {key: to_float32(value) for key, value in output.items()}
-        return output.float() if output.is_floating_point() else output
+        return output.float() if isinstance(output, torch.Tensor) and output.is_floating_point() else output
 
     def autocast_method(*args, **kwargs):
         with torch.autocast(device_type, dtype=torch.bfloat16):
@@ -57,6 +57,14 @@ def _autocast(method, device_type: str):
         return to_float32(output)
 
     return autocast_method
+
+
+def observation_fields(obs: Any) -> list[dict[str, torch.Tensor]]:
+    """Each environment's observation as replay-buffer fields: "obs" (the image) and, with an instruction memory,
+    "tokens"."""
+    if isinstance(obs, dict):
+        return [{"obs": image, "tokens": tokens} for image, tokens in zip(obs["image"], obs["tokens"])]
+    return [{"obs": env_obs} for env_obs in obs]
 
 
 def print_summary(cfg):
@@ -184,9 +192,9 @@ class OnlineModule(nn.Module, ABC):
         return checkpoints_dir
 
     @abstractmethod
-    def select_action(self, obs: torch.Tensor, is_first: bool = False, mode: str = "train") -> torch.Tensor:
-        """The actions (num_envs, action_dim) after observing obs (num_envs, ...), in mode "train" (sampled), "eval"
-        (mode) or "random"."""
+    def select_action(self, obs: Any, is_first: bool = False, mode: str = "train") -> torch.Tensor:
+        """The actions (num_envs, action_dim) after observing obs (num_envs, ...; or a dict of such tensors), in mode
+        "train" (sampled), "eval" (mode) or "random"."""
 
     @abstractmethod
     def training_step(self, batch: dict[str, torch.Tensor], visualize: bool = False) -> dict[str, Any]:
@@ -282,8 +290,8 @@ class OnlineModule(nn.Module, ABC):
                 self.finished_returns = []
             obs = self.runner.reset()
             with self.timings.measure("replay_buffer/add_step"):
-                for env_index, env_obs in enumerate(obs):
-                    first = {"obs": env_obs, "action": self._nan_action(), "reward": torch.tensor(float("nan"))}
+                for env_index, env_obs in enumerate(observation_fields(obs)):
+                    first = {**env_obs, "action": self._nan_action(), "reward": torch.tensor(float("nan"))}
                     self.replay_buffer.add_step(first, stream=env_index)
             self.log("train/num_episodes", self.num_episodes)
             self.log("train/num_steps", self.num_steps)
@@ -291,9 +299,10 @@ class OnlineModule(nn.Module, ABC):
         # Select actions, step the environments, and store the resulting experience.
         mode = "train" if self.num_steps >= self.num_seed else "random"
         obs, rewards, dones, _ = self.runner.step(mode)
+        steps = zip(observation_fields(obs), self.runner.action, rewards, dones)
         with self.timings.measure("replay_buffer/add_step"):
-            for env_index, (env_obs, action, reward, done) in enumerate(zip(obs, self.runner.action, rewards, dones)):
-                step = {"obs": env_obs, "action": action, "reward": reward}
+            for env_index, (env_obs, action, reward, done) in enumerate(steps):
+                step = {**env_obs, "action": action, "reward": reward}
                 self.replay_buffer.add_step(step, done=done, stream=env_index)
                 if done:
                     self.finished_returns.append(self.replay_buffer.last_episode_return)
@@ -342,11 +351,11 @@ class OnlineModule(nn.Module, ABC):
             raise ValueError(f"Unknown stages {sorted(unknown)}; expected some of {self.STAGES}.")
         return stages
 
-    def _policy(self, obs: torch.Tensor, is_first: bool, mode: str) -> torch.Tensor:
+    def _policy(self, obs: Any, is_first: bool, mode: str) -> torch.Tensor:
         if self.cudagraphs:  # Outputs of earlier replays are copied out by now.
             torch.compiler.cudagraph_mark_step_begin()
         # select_action reads last_action to encode the next observation.
-        self.last_action[:] = self.select_action(obs.to(self.device), is_first=is_first, mode=mode)
+        self.last_action[:] = self.select_action(to_device(obs, self.device), is_first=is_first, mode=mode)
         return self.last_action
 
     def _nan_action(self) -> torch.Tensor:
@@ -503,6 +512,9 @@ class OnlineModule(nn.Module, ABC):
         if "replay_buffer_path" in checkpoint:
             self.restore_replay_buffer(checkpoint)
 
+    def check_replay_buffer_fields(self, fields: Mapping[str, Any]) -> None:
+        """Raise if the steps this module collects would not fit a saved replay buffer with these fields."""
+
     def restore_replay_buffer(self, checkpoint: dict[str, Any]) -> None:
         """Load the replay buffer files the checkpoint points to, described by their bookkeeping.pt (consistent with
         the files and, for a live buffer, possibly newer than the checkpoint) or, for older checkpoints without that
@@ -531,6 +543,7 @@ class OnlineModule(nn.Module, ABC):
             return
         if info.fields is None:
             raise ValueError("Cannot load replay buffer without fields.")
+        self.check_replay_buffer_fields(info.fields)
         self.replay_buffer.load_from_disk_storage(path, bookkeeping)
         logger.info(
             "Restored %d episodes (%d steps) of the replay buffer from %s, described by %s.",
