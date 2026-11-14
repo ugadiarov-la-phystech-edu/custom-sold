@@ -81,11 +81,11 @@ class SlotAggregationTransformer(nn.Module):
 
         # Add the output and register tokens to the slots (at every batch and time step).
         out_and_register_tokens = self.out_and_register_tokens.repeat(batch_size, sequence_length, 1, 1)
-        if language is not None:  # Condition each step's output token, the query that aggregates the slots.
+        if language is not None:  # Condition each step's output token (the last one, read below).
             expected = (batch_size, sequence_length)
             if language.shape[:2] != expected:
                 raise ValueError(f"Expected language of shape {expected}, got {tuple(language.shape[:2])}.")
-            language_tokens = F.pad(language.unsqueeze(2), (0, 0, 0, self.num_register_tokens))  # Zero for registers.
+            language_tokens = F.pad(language.unsqueeze(2), (0, 0, self.num_register_tokens, 0))  # Zero for registers.
             out_and_register_tokens = out_and_register_tokens + language_tokens
         tokens = torch.cat((slot_tokens, out_and_register_tokens), dim=2)
 

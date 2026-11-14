@@ -183,6 +183,16 @@ def test_slot_aggregation_transformer_rejects_language_of_another_batch_or_lengt
         _transformer()(torch.randn(2, 5, 2, 4), language=torch.randn(shape))
 
 
+@pytest.mark.parametrize("registers", [0, 2])
+def test_slot_aggregation_transformer_adds_language_to_the_token_it_reads(registers):
+    model = _transformer(registers=registers)
+    slots, language = torch.randn(2, 5, 2, 4), torch.randn(8)
+    conditioned = model(slots, language=language.expand(2, 5, 8))
+    with torch.no_grad():
+        model.out_and_register_tokens[..., -1, :] += language  # The token read out at each step.
+    assert torch.allclose(conditioned, model(slots), atol=1e-5)
+
+
 def test_slot_aggregation_transformer_language_is_causal():
     model = _transformer()
     slots, language = torch.randn(1, 5, 2, 4), torch.randn(1, 5, 8)
