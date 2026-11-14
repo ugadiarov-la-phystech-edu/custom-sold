@@ -142,7 +142,7 @@ def draw_reward(observation, reward, color=(255, 255, 255)):
 
 
 @torch.no_grad()
-def get_attention_weights(model: nn.Module, slots: torch.Tensor) -> torch.Tensor:
+def get_attention_weights(model: nn.Module, slots: torch.Tensor, tokens: torch.Tensor | None = None) -> torch.Tensor:
     """Attention of the predictor's output token at the last time step on each slot, by attention rollout.
 
     Inspired by https://github.com/jeonsworld/ViT-pytorch/blob/main/visualize_attention_map.ipynb
@@ -150,13 +150,16 @@ def get_attention_weights(model: nn.Module, slots: torch.Tensor) -> torch.Tensor
     Args:
         model (nn.Module): A predictor with a slot_aggregation_transformer (see modeling.sold.prediction).
         slots (torch.Tensor): Slot history of shape (1, sequence_length, num_slots, slot_dim).
+        tokens (torch.Tensor, optional): Instruction memories (1, sequence_length, memory_length) for a predictor with
+            language.
 
     Returns:
         torch.Tensor: Weights of shape (sequence_length, num_slots), scaled to a maximum of 1.
     """
     batch_size, sequence_length, num_slots, slot_dim = slots.size()
+    language = model.encode_language(tokens) if hasattr(model, "encode_language") else None
     _, layer_weights = model.slot_aggregation_transformer.forward_with_attention(
-        slots.detach(), start=sequence_length - 1
+        slots.detach(), start=sequence_length - 1, language=language
     )
     att_mat = torch.stack(layer_weights)
 
@@ -256,14 +259,18 @@ def reward_figures(
     reconstruction: dict[str, torch.Tensor],
     rewards: torch.Tensor,
     predicted_rewards: torch.Tensor,
+    tokens: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
-    """Predicted vs. true rewards and, for slot-based autoencoders, the reward predictor's attention."""
+    """Predicted vs. true rewards and, for slot-based autoencoders, the reward predictor's attention (tokens: the
+    batch's instruction memories, for a reward predictor with language)."""
     images, reconstructions = reconstruction["images"][0], reconstruction["reconstructions"][0]
     figures = {
         "reward_prediction": visualize_reward_prediction(images, reconstructions, rewards[0], predicted_rewards[0])
     }
     if "masks" in reconstruction:
-        attention_weights = get_attention_weights(reward_predictor, reconstruction["slots"][0:1])
+        attention_weights = get_attention_weights(
+            reward_predictor, reconstruction["slots"][0:1], None if tokens is None else tokens[0:1]
+        )
         figures["reward_predictor_attention"] = visualize_reward_predictor_attention(
             images,
             reconstructions,
@@ -283,8 +290,10 @@ def imagination_figures(
     imagined_slots: torch.Tensor,
     num_context: int,
     predicted_rewards: torch.Tensor,
+    tokens: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
-    """An imagined trajectory with predicted rewards and, for slot-based autoencoders, the actor's attention."""
+    """An imagined trajectory with predicted rewards and, for slot-based autoencoders, the actor's attention (tokens:
+    the instruction memories of the imagined steps, for an actor with language)."""
     outputs = autoencoder.decode(imagined_slots[0:1])
     rewards = predicted_rewards[0].tolist()
     x_ticks = np.array([""] * num_context + [f"rew={rewards[0]:.2f}"] + [f"{r:.2f}" for r in rewards[1:]])
@@ -296,7 +305,7 @@ def imagination_figures(
         )
     }
     if "masks" in outputs:
-        attention_weights = get_attention_weights(actor, imagined_slots[:1])
+        attention_weights = get_attention_weights(actor, imagined_slots[:1], None if tokens is None else tokens[:1])
         figures["actor_attention"] = visualize_output_attention(
             attention_weights, outputs["reconstructions"][0], outputs["rgbs"][0], outputs["masks"][0]
         )

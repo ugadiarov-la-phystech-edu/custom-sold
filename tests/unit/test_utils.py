@@ -324,6 +324,28 @@ def test_get_attention_weights_matches_a_manual_rollout():
     assert torch.allclose(vis.get_attention_weights(model, slots), output_row / output_row.max(), atol=1e-6)
 
 
+def test_get_attention_weights_with_language_uses_the_tokens():
+    from sold.modeling.sold.prediction import TwoHotPredictor
+
+    sizes = dict(max_episode_steps=6, num_slots=2, slot_dim=4, token_dim=8, num_heads=2, num_layers=2, hidden_dim=8)
+    model = TwoHotPredictor(**sizes, language={"vocab_size": 20, "embed_dim": 4})
+    slots, tokens = torch.randn(1, 3, 2, 4), torch.tensor([[[3, 4, 0]] * 3])
+    language = model.language_encoder(tokens)
+    _, layer_weights = model.slot_aggregation_transformer.forward_with_attention(slots, start=2, language=language)
+    eye = torch.eye(layer_weights[0].size(-1))
+    first, second = [(w[0] + eye) / (w[0] + eye).sum(-1, keepdim=True) for w in layer_weights]
+    output_row = (second @ first)[-1].view(3, -1)[:, :2]
+    assert torch.allclose(vis.get_attention_weights(model, slots, tokens), output_row / output_row.max(), atol=1e-6)
+    with pytest.raises(ValueError, match="got no tokens"):
+        vis.get_attention_weights(model, slots)
+
+
+def test_get_attention_weights_on_a_model_without_language_encoding():
+    transformer_only = torch.nn.Module()
+    transformer_only.slot_aggregation_transformer = _predictor().slot_aggregation_transformer
+    assert vis.get_attention_weights(transformer_only, torch.randn(1, 3, 2, 4)).shape == (3, 2)
+
+
 def test_attention_visualizations():
     seq, slots = 3, 2
     weights = torch.rand(seq, slots)

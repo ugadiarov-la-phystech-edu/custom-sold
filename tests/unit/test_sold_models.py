@@ -163,6 +163,36 @@ def test_slot_aggregation_transformer_is_causal():
     assert not torch.allclose(out[:, 3:], out_changed[:, 3:])
 
 
+def test_slot_aggregation_transformer_adds_language_to_the_output_tokens():
+    model = _transformer()
+    slots, language = torch.randn(2, 5, 2, 4), torch.randn(2, 5, 8)
+    assert torch.allclose(model(slots, language=torch.zeros(2, 5, 8)), model(slots), atol=1e-6)
+    out = model(slots, language=language)
+    assert out.shape == (2, 5, 8) and not torch.allclose(out, model(slots))
+    assert torch.allclose(model(slots, start=3, language=language), out[:, 3:], atol=1e-5)
+    for step in range(5):
+        index = torch.tensor([step])
+        assert torch.allclose(model(slots, index=index, language=language), out[:, step : step + 1], atol=1e-5)
+    outputs, _ = model.forward_with_attention(slots, start=1, language=language)
+    assert torch.allclose(outputs, out[:, 1:], atol=1e-5)
+
+
+@pytest.mark.parametrize("shape", [(2, 1, 8), (1, 5, 8)])
+def test_slot_aggregation_transformer_rejects_language_of_another_batch_or_length(shape):
+    with pytest.raises(ValueError, match=r"Expected language of shape \(2, 5\)"):
+        _transformer()(torch.randn(2, 5, 2, 4), language=torch.randn(shape))
+
+
+def test_slot_aggregation_transformer_language_is_causal():
+    model = _transformer()
+    slots, language = torch.randn(1, 5, 2, 4), torch.randn(1, 5, 8)
+    changed = language.clone()
+    changed[:, 3] += 1.0
+    out, out_changed = model(slots, language=language), model(slots, language=changed)
+    assert torch.allclose(out[:, :3], out_changed[:, :3], atol=1e-5)
+    assert not torch.allclose(out[:, 3], out_changed[:, 3]) and not torch.allclose(out[:, 4], out_changed[:, 4])
+
+
 def test_transformer_encoder_layer_with_and_without_mask():
     layer = TransformerEncoderLayer(d_model=8, nhead=2, dim_feedforward=16)
     x = torch.randn(2, 5, 8)
@@ -242,6 +272,65 @@ def test_gaussian_predictor_bounds_are_device_buffers_outside_the_checkpoint():
     assert "lower_bound" not in model.state_dict() and "upper_bound" not in model.state_dict()
     model.to(torch.float64)
     assert model.lower_bound.dtype == torch.float64  # Moves and casts with the module.
+
+
+LANGUAGE = {"vocab_size": 50, "embed_dim": 4}
+
+
+def _tokens(batch=2, steps=3, ids=(5, 9, 0)):
+    return torch.tensor(ids).repeat(batch, steps, 1)
+
+
+def test_predictors_without_language_have_no_encoder():
+    model = Predictor(**PREDICTOR_ARGS, output_dim=3)
+    assert model.language_encoder is None and model.encode_language(None) is None
+    assert not any(name.startswith("language_encoder") for name in model.state_dict())
+
+
+def test_predictor_language_without_arguments_uses_the_encoder_defaults():
+    encoder = Predictor(**PREDICTOR_ARGS, output_dim=3, language={}).language_encoder
+    assert encoder.embedding.num_embeddings == 32128 and encoder.embedding.embedding_dim == 32
+
+
+def test_predictor_with_language_conditions_on_the_tokens():
+    model = Predictor(**PREDICTOR_ARGS, output_dim=3, language=LANGUAGE)
+    encoder = model.language_encoder
+    assert encoder.embedding.num_embeddings == 50 and encoder.projection.out_features == PREDICTOR_ARGS["token_dim"]
+    slots = torch.randn(2, 3, 2, 4)
+    out = model(slots, tokens=_tokens())
+    assert out.shape == (2, 3, 3) and not torch.allclose(out, model(slots, tokens=_tokens(ids=(7, 0, 0))))
+    language = encoder(_tokens())
+    expected = model.mlp(model.slot_aggregation_transformer(slots, start=1, language=language))
+    assert torch.allclose(model(slots, start=1, tokens=_tokens()), expected, atol=1e-6)
+    assert torch.allclose(model.encode_language(_tokens()), language)
+
+
+def test_predictor_language_and_tokens_must_go_together():
+    slots = torch.randn(2, 3, 2, 4)
+    with pytest.raises(ValueError, match="built with language, but got no tokens"):
+        Predictor(**PREDICTOR_ARGS, output_dim=3, language=LANGUAGE)(slots)
+    with pytest.raises(ValueError, match="built without language, but got tokens"):
+        Predictor(**PREDICTOR_ARGS, output_dim=3)(slots, tokens=_tokens())
+
+
+def test_heads_take_the_tokens_by_keyword_only():
+    with pytest.raises(TypeError):
+        TwoHotPredictor(**PREDICTOR_ARGS, language=LANGUAGE)(torch.randn(2, 3, 2, 4), 0, _tokens())
+
+
+def test_heads_pass_the_tokens_on():
+    slots, tokens, other = torch.randn(2, 3, 2, 4), _tokens(), _tokens(ids=(7, 0, 0))
+    critic = TwoHotPredictor(**PREDICTOR_ARGS, language=LANGUAGE)
+    assert critic(slots, start=2, tokens=tokens).logits.shape == (2, 1, 255)
+    assert not torch.allclose(critic(slots, tokens=tokens).mean, critic(slots, tokens=other).mean)
+    scalar = ScalarPredictor(**PREDICTOR_ARGS, language=LANGUAGE)
+    assert not torch.allclose(scalar(slots, tokens=tokens).mean, scalar(slots, tokens=other).mean)
+    actor = GaussianPredictor(
+        **PREDICTOR_ARGS, output_dim=2, lower_bound=[-1.0, -1.0], upper_bound=[1.0, 1.0], language=LANGUAGE
+    )
+    assert not torch.allclose(actor(slots, tokens=tokens).mean, actor(slots, tokens=other).mean)
+    index = torch.tensor([1])
+    assert torch.allclose(actor(slots, index=index, tokens=tokens).mean, actor(slots, tokens=tokens).mean[:, 1:2])
 
 
 def test_two_hot_predictor():

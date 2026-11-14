@@ -3,6 +3,7 @@ from sold.modeling.positional_encoding import PositionalEncoding
 import torch
 from torch import Tensor, nn
 from torch.nn import Dropout, Linear, Module, MultiheadAttention, RMSNorm
+import torch.nn.functional as F
 
 
 class SlotAggregationTransformer(nn.Module):
@@ -45,26 +46,47 @@ class SlotAggregationTransformer(nn.Module):
         self.positional_encoding = positional_encoding
         self.slot_projection = nn.Linear(slot_dim, self.token_dim)
 
-    def forward(self, slots: torch.Tensor, start: int = 0, index: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(
+        self,
+        slots: torch.Tensor,
+        start: int = 0,
+        index: torch.Tensor | None = None,
+        language: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """Output tokens from time step start on, shape (batch_size, sequence_length - start, token_dim).
 
         With index (a one-element tensor), only the token of that time step, (batch_size, 1, token_dim): the causal mask
         hides the later steps, so slots padded beyond index give the same token as slots ending at index.
+        language (batch_size, sequence_length, token_dim), e.g. an encoded instruction, is added to each step's output
+        token.
         """
-        return self._encode(slots, start, return_attention=False, index=index)[0]
+        return self._encode(slots, start, return_attention=False, index=index, language=language)[0]
 
-    def forward_with_attention(self, slots: torch.Tensor, start: int = 0) -> tuple[torch.Tensor, list[torch.Tensor]]:
+    def forward_with_attention(
+        self, slots: torch.Tensor, start: int = 0, language: torch.Tensor | None = None
+    ) -> tuple[torch.Tensor, list[torch.Tensor]]:
         """The output tokens and each layer's head-averaged attention weights, (batch_size, num_tokens, num_tokens)."""
-        return self._encode(slots, start, return_attention=True)
+        return self._encode(slots, start, return_attention=True, language=language)
 
     def _encode(
-        self, slots: torch.Tensor, start: int, return_attention: bool, index: torch.Tensor | None = None
+        self,
+        slots: torch.Tensor,
+        start: int,
+        return_attention: bool,
+        index: torch.Tensor | None = None,
+        language: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, list]:
         batch_size, sequence_length, num_slots, slot_dim = slots.shape
         slot_tokens = self.slot_projection(slots)  # Project slots to token_dim.
 
         # Add the output and register tokens to the slots (at every batch and time step).
         out_and_register_tokens = self.out_and_register_tokens.repeat(batch_size, sequence_length, 1, 1)
+        if language is not None:  # Condition each step's output token, the query that aggregates the slots.
+            expected = (batch_size, sequence_length)
+            if language.shape[:2] != expected:
+                raise ValueError(f"Expected language of shape {expected}, got {tuple(language.shape[:2])}.")
+            language_tokens = F.pad(language.unsqueeze(2), (0, 0, 0, self.num_register_tokens))  # Zero for registers.
+            out_and_register_tokens = out_and_register_tokens + language_tokens
         tokens = torch.cat((slot_tokens, out_and_register_tokens), dim=2)
 
         time_encoded_tokens = self.positional_encoding(tokens)

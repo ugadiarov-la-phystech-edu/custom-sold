@@ -1,10 +1,12 @@
-"""Language: the instruction memory of streamed instructions (sold.envs.wrappers.language)."""
+"""Language: the memory of streamed instructions (sold.envs.wrappers.language) and its encoder."""
 
 import numpy as np
 import pytest
 from sold.envs.wrappers import language
 from sold.envs.wrappers.language import LanguageMemory, add_language
+from sold.modeling.sold.language import T5_VOCAB_SIZE, LanguageEncoder
 from tests import fakes
+import torch
 
 RED, BLUE = (list(ids) for ids in fakes.INSTRUCTIONS.values())  # Episodes alternate between them.
 
@@ -101,3 +103,33 @@ def test_language_wrapper_class_is_multi_object_fetchs():
     from multi_object_fetch.language import LanguageWrapper
 
     assert language.language_wrapper_class() is LanguageWrapper
+
+
+# ------------------------------------------------------------------------------------ encoder
+def test_encoder_maps_memories_to_token_vectors():
+    encoder = LanguageEncoder(token_dim=8)
+    assert encoder.embedding.num_embeddings == T5_VOCAB_SIZE and encoder.embedding.embedding_dim == 32
+    tokens = torch.tensor(padded(RED)).repeat(2, 3, 1)  # (batch, time, memory_length)
+    assert encoder(tokens).shape == (2, 3, 8)
+    assert LanguageEncoder(token_dim=8, vocab_size=10, embed_dim=4)(torch.tensor([[1, 2, 0]])).shape == (1, 8)
+
+
+def test_encoder_averages_the_heard_ids_regardless_of_order_and_padding():
+    encoder = LanguageEncoder(token_dim=8, vocab_size=10, embed_dim=4)
+    heard = encoder(torch.tensor([3, 7]))
+    assert torch.allclose(encoder(torch.tensor([7, 3, 0, 0, 0])), heard, atol=1e-6)
+    mean = encoder.embedding.weight[[3, 7]].mean(0)
+    assert torch.allclose(heard, encoder.projection(mean), atol=1e-6)
+    assert not torch.allclose(encoder(torch.tensor([3, 3])), heard)
+
+
+def test_encoder_of_an_empty_memory_is_the_projection_bias():
+    encoder = LanguageEncoder(token_dim=8, vocab_size=10, embed_dim=4)
+    assert torch.allclose(encoder(torch.zeros(2, 5, dtype=torch.long)), encoder.projection.bias.expand(2, 8))
+
+
+def test_encoder_trains_the_embeddings_of_the_heard_ids_only():
+    encoder = LanguageEncoder(token_dim=8, vocab_size=10, embed_dim=4)
+    encoder(torch.tensor([[3, 7, 0]])).sum().backward()
+    grad = encoder.embedding.weight.grad
+    assert grad[[3, 7]].abs().sum() > 0 and grad[[0, 1, 2, 4, 5, 6, 8, 9]].abs().sum() == 0
